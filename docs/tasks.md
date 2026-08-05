@@ -66,7 +66,7 @@ T10〜T14 は互いに独立で、T02 が終われば並行できる（T10 は T
 
 ## T01: パッケージ骨格と CI
 
-状態: 進行中（手元の3コマンドは通った。**CI が緑になることは push 後に確認**）
+状態: 完了
 
 ### 目的
 
@@ -84,7 +84,7 @@ T10〜T14 は互いに独立で、T02 が終われば並行できる（T10 は T
 ### 完了条件
 
 - [x] `uv run pytest` / `uv run ruff check .` / `uv run mypy .` の3つが通る（design.md 10.5「各タスクの完了条件とする」）
-- [ ] push で CI（ruff + mypy + pytest）が走り、緑になる（WORKFLOW.md フェーズ6 の雛形）← push 待ち
+- [x] push で CI（ruff + mypy + pytest）が走り、緑になる（WORKFLOW.md フェーズ6 の雛形）
 - [x] 非機能要件「API キーをソースコードおよびリポジトリに含めない」を満たす（`.env` が git 管理外であることを再確認。`git ls-files .env` が空）
 - [x] `ui/` 以外に `import streamlit` が無い（design.md 1.2 の規律。lint で守れる形にする）
   - ruff の `flake8-tidy-imports` で `streamlit` / `streamlit_folium` を禁止し、`ui/**` だけ除外
