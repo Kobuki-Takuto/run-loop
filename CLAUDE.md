@@ -5,7 +5,7 @@
 RunLoop: 起点と目標距離を指定すると、その距離に近い周回ランニングコースを
 1本提案する Streamlit Web アプリ。
 
-**仕様の正典は [docs/requirements.md](docs/requirements.md)（版1.0・確定）。**
+**仕様の正典は [docs/requirements.md](docs/requirements.md)。**
 実装判断で迷ったら受け入基準（AC-xx）を根拠にする。
 開発の進め方は [docs/WORKFLOW.md](docs/WORKFLOW.md) に従う。
 
