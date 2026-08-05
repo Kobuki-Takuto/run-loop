@@ -10,6 +10,12 @@ wheels/
 .venv
 .env
 
+# ツールの生成物
+.coverage
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
 # スパイクの生成物（レスポンス本体や測定 CSV）。
 # モックに使う分は tests/fixtures/ に移してコミットする
 spike/out/

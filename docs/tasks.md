@@ -66,7 +66,7 @@ T10〜T14 は互いに独立で、T02 が終われば並行できる（T10 は T
 
 ## T01: パッケージ骨格と CI
 
-状態: 未着手
+状態: 進行中（手元の3コマンドは通った。**CI が緑になることは push 後に確認**）
 
 ### 目的
 
@@ -83,10 +83,23 @@ T10〜T14 は互いに独立で、T02 が終われば並行できる（T10 は T
 
 ### 完了条件
 
-- [ ] `uv run pytest` / `uv run ruff check .` / `uv run mypy .` の3つが通る（design.md 10.5「各タスクの完了条件とする」）
-- [ ] push で CI（ruff + pytest + mypy）が走り、緑になる（WORKFLOW.md フェーズ6 の雛形）
-- [ ] 非機能要件「API キーをソースコードおよびリポジトリに含めない」を満たす（`.env` が git 管理外であることを再確認）
-- [ ] `ui/` 以外に `import streamlit` が無い（design.md 1.2 の規律。lint で守れる形にする）
+- [x] `uv run pytest` / `uv run ruff check .` / `uv run mypy .` の3つが通る（design.md 10.5「各タスクの完了条件とする」）
+- [ ] push で CI（ruff + mypy + pytest）が走り、緑になる（WORKFLOW.md フェーズ6 の雛形）← push 待ち
+- [x] 非機能要件「API キーをソースコードおよびリポジトリに含めない」を満たす（`.env` が git 管理外であることを再確認。`git ls-files .env` が空）
+- [x] `ui/` 以外に `import streamlit` が無い（design.md 1.2 の規律。lint で守れる形にする）
+  - ruff の `flake8-tidy-imports` で `streamlit` / `streamlit_folium` を禁止し、`ui/**` だけ除外
+  - `tests/test_layering.py` でも二重に固定（設定を緩めたときに静かに崩れないように）
+
+### 実装メモ
+
+- `main.py`（`uv init` の雛形）を削除した。Streamlit の入口は T17 以降の `ui/app.py`
+- `spike/**` は ruff の `ANN` / `E501` / `TID251` を除外した。**`E501` を外したのは、
+  design.md 3.3 が spike のコードを行番号つきで引用しており、整形で行がずれると
+  引用が合わなくなるため**
+- mypy は `strict = true`、`spike/` は対象外（使い捨てで本体から参照しない）
+- pytest に `pythonpath = ["."]` を入れた（`runloop` / `ui` をインストールせずに import する）
+- テスト関数にも `-> None` を書く（mypy strict と CLAUDE.md「型ヒントを必ず書く」に合わせ、
+  ruff 側の例外は置かない）
 
 ### 参照
 

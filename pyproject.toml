@@ -20,3 +20,39 @@ dev = [
     "responses>=0.26.2",
     "ruff>=0.16.1",
 ]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "TID", "ANN"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+# design.md 1.2 の規律: ui/ 以外は Streamlit を import しない。
+# 画面を自動テストしない方針なので、ロジックが Streamlit に依存すると
+# 「テストできない範囲」が広がる。
+# streamlit_js_eval は runloop/persistence.py が使う（design.md 8.1）ため禁止しない。
+"streamlit".msg = "ui/ 以外で Streamlit を import しない（design.md 1.2）"
+"streamlit_folium".msg = "ui/ 以外で Streamlit を import しない（design.md 1.2）"
+
+[tool.ruff.lint.per-file-ignores]
+# Streamlit 層。ここだけが Streamlit を import してよい
+"ui/**" = ["TID251"]
+# 使い捨てスクリプト。本体から参照しないため規約を緩める。
+# 特に E501 を無効にするのは、docs/design.md 3.3 が spike のコードを行番号つきで
+# 引用しているため、整形で行がずれると引用が合わなくなることを避ける意図。
+"spike/**" = ["ANN", "E501", "TID251"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+# 使い捨てのスパイクスクリプトは型チェックの対象外（本体から参照しない）
+exclude = ['^spike/', '^\.venv/']
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+# プロジェクト直下を import 対象にする（runloop / ui はインストールせずに使う）
+pythonpath = ["."]
