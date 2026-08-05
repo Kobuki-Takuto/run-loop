@@ -383,7 +383,7 @@ def main() -> int:
 
     # ===== 1. 単純方式 / 3. 2段方式 / 4. 良い方を採る =====
     print("\n=== 命中率の比較（判定は合計距離基準）===")
-    _, n_simple, lo_simple, _ = describe("1. 単純方式（1本目）", probes)
+    h_simple, n_simple, lo_simple, hi_simple = describe("1. 単純方式（1本目）", probes)
     describe("3. 2段方式（2本目のみ）", corrected_rows)
 
     by_seed: dict[int, list[Row]] = {}
@@ -394,7 +394,7 @@ def main() -> int:
         usable = [r for r in rows if r.ok]
         if usable:
             best_rows.append(min(usable, key=lambda r: abs(r.total_error_m or 1e9)))
-    describe("4. 良い方を採る（1本+2本）", best_rows)
+    h_best, n_best, lo_best, hi_best = describe("4. 良い方を採る（1本+2本）", best_rows)
 
     # ===== 2. 決定ルールの判定 =====
     print("\n=== 2. 決定ルールの判定 ===")
@@ -415,12 +415,55 @@ def main() -> int:
             "【単純方式では不足】。2段方式を採用する。"
         )
 
-    # 呼び出し数と毎分制限への耐性（方式比較の観点として出す）
+    # ===== 在庫数の比較 =====
+    # 引き直し（別のコースを見たい操作）は、取得済みの候補から2番目に良いものを
+    # 出せば済むので API を叩かない。したがって方式の価値は「1本を精度よく
+    # 当てること」ではなく「±300m を満たす候補を何本在庫できるか」になる。
+    print("\n=== 在庫数の比較（±300m を満たす候補が平均何本得られるか）===")
+    pairs = DECISION_TRIALS * 2 // 3  # 20回相当のペア数（=10）
+    print(f"  {'方式':<26} {'呼出':>4} {'在庫(平均)':>12} {'95%CI':>16} {'≥1本':>7} {'≥2本':>7}")
+    print("  " + "-" * 78)
+    for label, units, calls, point, plo, phi in (
+        (
+            f"単純方式 {DECISION_TRIALS} 本",
+            DECISION_TRIALS,
+            DECISION_TRIALS,
+            h_simple / n_simple if n_simple else 0.0,
+            lo_simple,
+            hi_simple,
+        ),
+        (
+            f"単純方式 {pairs * 2} 本（同予算）",
+            pairs * 2,
+            pairs * 2,
+            h_simple / n_simple if n_simple else 0.0,
+            lo_simple,
+            hi_simple,
+        ),
+        (
+            f"2段方式 {pairs} ペア",
+            pairs,
+            pairs * 2,
+            h_best / n_best if n_best else 0.0,
+            lo_best,
+            hi_best,
+        ),
+    ):
+        at_least_1 = 1 - (1 - point) ** units
+        at_least_2 = at_least_1 - units * point * (1 - point) ** (units - 1)
+        print(
+            f"  {label:<26} {calls:>4} {units * point:>10.1f} 本  "
+            f"{units * plo:>6.1f}〜{units * phi:<7.1f} "
+            f"{at_least_1:>6.1%} {max(at_least_2, 0.0):>7.1%}"
+        )
+    print("  ≥2本 = 引き直し（2番目の候補を出す）が API なしで成立する確率")
+
     print("\n  呼び出し数と毎分制限（約40回/分）への耐性:")
-    print(f"    単純方式 {DECISION_TRIALS} 本 = {DECISION_TRIALS} 回/実行 → 連続 {40 // DECISION_TRIALS} 回で制限")
-    pairs = 20 // 2
-    print(f"    2段方式 {pairs} ペア = {pairs * 2} 回/実行 → 連続 {40 // (pairs * 2)} 回で制限")
-    print("    連続実行（引き直し）は自然な操作なので、回数の少なさは実用上の利点")
+    print(f"    単純方式 {DECISION_TRIALS} 本 = {DECISION_TRIALS} 回/実行")
+    print(f"    2段方式 {pairs} ペア = {pairs * 2} 回/実行")
+    print("    引き直しを在庫から出すなら API を叩かないので、毎分制限は")
+    print("    「新しい距離で引き直す頻度」だけで評価すればよい。回数の少ない")
+    print("    方式ほど有利だが、在庫が減るなら引き直し自体ができなくなる")
 
     # ===== 5. 補正後の誤差の符号 =====
     print("\n=== 5. 補正後の誤差の符号 ===")
