@@ -2,7 +2,7 @@
 
 - 版: 1.0
 - 作成日: 2026-08-05
-- 根拠: [requirements.md](requirements.md)（版1.1・確定）と [spike/FINDINGS.md](../spike/FINDINGS.md)
+- 根拠: [requirements.md](requirements.md)（版1.2・確定）と [spike/FINDINGS.md](../spike/FINDINGS.md)
 - 技術選定の記録: [adr/](adr/)（0001〜0004）
 
 この文書は「何をどこに置き、なぜそうするか」を決める。コードは書かない。
