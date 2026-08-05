@@ -113,7 +113,7 @@ design.md 1.1 / 1.2 / 10.5、WORKFLOW.md フェーズ0・6
 
 ## T02: models.py と geo.py（合計距離を計算プロパティにする）
 
-状態: 未着手
+状態: 進行中
 
 ### 目的
 
@@ -130,14 +130,37 @@ T01
 
 ### 完了条件
 
-- [ ] AC-01-2「表示されたコースの**合計距離**（ループ距離 + 接近距離 × 2）が、目標距離の ±300m 以内である」→ `total_m` と `is_within_tolerance` のテスト
-- [ ] AC-01-5「合計距離が目標距離の3倍を超える候補は異常値として除外する」→ `is_degenerate` のテスト
-- [ ] AC-02-2「距離誤差（合計距離 − 目標距離）がメートル単位で、符号付きで表示される」→ `error_m` の符号のテスト
-- [ ] 境界値4件が design.md 5.1 の表どおり（誤差 300.0 は在庫に入れる／ちょうど3倍は異常値にしない／接近 50.0 は OK／300.0 は WARN）
-- [ ] `geo.haversine` が既知の2点で期待値を返す（スパイクと同じ球近似）
-- [ ] 丸めを一切しない（表示の丸めは T12 の責務。design.md 2.2）
-- [ ] `frozen=True` のデータクラスで、`target_m` を `Candidate` に焼き付けている（design.md 2.2）
-- [ ] テストを先に書き、失敗を確認してから実装した
+- [x] AC-01-2「表示されたコースの**合計距離**（ループ距離 + 接近距離 × 2）が、目標距離の ±300m 以内である」→ `total_m` と `is_within_tolerance` のテスト
+- [x] AC-01-5「合計距離が目標距離の3倍を超える候補は異常値として除外する」→ `is_degenerate` のテスト
+- [x] AC-02-2「距離誤差（合計距離 − 目標距離）がメートル単位で、符号付きで表示される」→ `error_m` の符号のテスト
+- [x] 境界値4件が design.md 5.1 の表どおり（誤差 300.0 は在庫に入れる／ちょうど3倍は異常値にしない／接近 50.0 は OK／300.0 は WARN）
+- [x] `geo.haversine` が既知の2点で期待値を返す（スパイクと同じ球近似）
+- [x] 丸めを一切しない（表示の丸めは T12 の責務。design.md 2.2）
+- [x] `frozen=True` のデータクラスで、`target_m` を `Candidate` に焼き付けている（design.md 2.2）
+- [x] テストを先に書き、失敗を確認してから実装した
+
+### 実装メモ
+
+- **置いた型を絞った。** `LatLon` / `RouteQuery` / `ApproachVerdict` / `Candidate` と
+  `geo.haversine` のみ。design.md 2.1 の残りは、対応する AC を持つタスクで足す
+  （`Turn` / `Checkpoint` → T11、`ProviderRoute` / `RawStep` → T03、
+  `GenerationOutcome` / `SelectionResult` → T08 / T10）。
+  **テストの根拠がない型を先に置かない**という判断
+- **`Candidate.turns` は T11 で追加する。** design.md 2.1 はフィールドに挙げているが、
+  `Turn` 型が T11 の成果物のため今回は持たせていない
+- **閾値の定数を `models.py` に置いた**（`TOLERANCE_M` / `DEGENERATE_FACTOR` /
+  `APPROACH_OK_M` / `APPROACH_REJECT_M`）。design.md 1.3 が「`models.py` は何にも
+  依存しない」と定めているため、`Candidate` のプロパティから `config.py` を
+  import できない。**T04 は `config.py` からこれを参照して公開する**
+- 接近距離の分類（`classify_approach`）もここに置いた。境界値（50.0 は OK、
+  300.0 は WARN）が design.md 5.1 の表に属し、定数と同じ場所にあるほうが揺れない
+- `geo.haversine` の期待値は実装から写さず、球面上の子午線・赤道の距離が
+  `R × 弧度` になる解析的性質から出した（遠距離1件のみ球面余弦定理で照合）。
+  **haversine の式をテストにも書くと、実装のバグが同じ形でテストに入る**
+- `pyproject.toml` に `[tool.ruff.lint.isort] known-first-party` を1行追加した
+  （`runloop` / `ui` が外部ライブラリと同じブロックに並んでいたため）
+- 実装後、故意に壊した5パターン（判定前の丸め・3倍の等号・接近 50.0 の等号・
+  緯度経度の取り違え・接近距離を1回しか足さない）でテストが落ちることを確認した
 
 ### 参照
 

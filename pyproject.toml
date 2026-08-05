@@ -29,6 +29,10 @@ extend-exclude = [".venv"]
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "TID", "ANN"]
 
+[tool.ruff.lint.isort]
+# 自作パッケージを外部ライブラリと別のブロックに分ける
+known-first-party = ["runloop", "ui"]
+
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 # design.md 1.2 の規律: ui/ 以外は Streamlit を import しない。
 # 画面を自動テストしない方針なので、ロジックが Streamlit に依存すると

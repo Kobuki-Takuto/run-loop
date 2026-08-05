@@ -1,0 +1,123 @@
+"""データ構造と、要件由来の閾値。
+
+このモジュールは**何にも依存しない**（design.md 1.3）。
+そのため閾値の定義元もここに置く。`Candidate.is_within_tolerance` から
+`config.py` を import すると依存の向きが逆流するためである。
+T04 の `config.py` はここの定数を参照して公開する。
+
+丸めは一切行わない。表示の丸め（AC-02-1 の小数第2位）は `messages.py` の責務で、
+判定は生の float で行う。表示のために丸めた値で判定すると、
+±300m の境界付近で表示と判定が食い違う（design.md 2.2）。
+"""
+
+import enum
+from dataclasses import dataclass
+from typing import Final
+
+# AC-01-2「合計距離が目標距離の ±300m 以内」。境界を含む（design.md 5.1）
+TOLERANCE_M: Final = 300.0
+
+# AC-01-5「合計距離が目標距離の3倍を超える候補は異常値」。ちょうど3倍は超えていない
+DEGENERATE_FACTOR: Final = 3
+
+# AC-01-3 の接近距離の区分。「〜50m」が OK、「300m 超」が拒否（design.md 5.1）
+APPROACH_OK_M: Final = 50.0
+APPROACH_REJECT_M: Final = 300.0
+
+
+@dataclass(frozen=True)
+class LatLon:
+    """緯度経度。**丸めない**（AC-05-1「自宅の玄関を正確に起点にしたい」）。"""
+
+    lat: float
+    lon: float
+
+
+@dataclass(frozen=True)
+class RouteQuery:
+    """1回の実行の条件。在庫の有効性の鍵に使う（design.md 6.2）。"""
+
+    origin: LatLon
+    target_m: int
+    # ORS に渡す周回の頂点数。本体は 3 で動かす（design.md 7.3）
+    points: int = 3
+    # AC-03-1「生成されるコースに階段が含まれない」
+    avoid_steps: bool = True
+
+
+class ApproachVerdict(enum.Enum):
+    """接近距離の区分（AC-01-3）。REJECT なら結果を表示しない。"""
+
+    OK = "ok"
+    WARN = "warn"
+    REJECT = "reject"
+
+
+def classify_approach(approach_m: float) -> ApproachVerdict:
+    """接近距離を3区分に分類する（design.md 5.1 の境界値表）。
+
+    境界の等号の入れ方は要件の文面から読み取った判断である。
+    ちょうど 50.0m は WARN ではなく OK、ちょうど 300.0m は REJECT ではなく WARN。
+    丸めてから比べない（300.4m を 300 と見なすと拒否すべき起点を通してしまう）。
+    """
+    if approach_m > APPROACH_REJECT_M:
+        return ApproachVerdict.REJECT
+    if approach_m > APPROACH_OK_M:
+        return ApproachVerdict.WARN
+    return ApproachVerdict.OK
+
+
+@dataclass(frozen=True)
+class Candidate:
+    """1本の候補コース。
+
+    合計距離や距離誤差は**フィールドとして持たず計算プロパティにする**
+    （design.md 2.2）。合計距離は判定（AC-01-2）にも表示（AC-02-1）にも使うため、
+    別々に組み立てると画面の値と選択が使った値が食い違う。
+
+    `target_m` を候補に焼き付けるのは、`error_m` の算出に目標距離が必要であり、
+    外から渡す形にすると呼び出し側が別の目標距離を渡す余地が残るためである。
+    1回の実行では目標距離は1つに決まる。
+
+    `approach_m` を候補ごとに持つのは、実測では起点だけで決まる値だが、
+    それは ORS の実測事実であってドメインの不変則ではないため
+    （プロバイダを替えて前提が崩れても構造が壊れない側に倒す。design.md 2.2）。
+
+    `turns`（方向転換の列）は T11 で追加する。
+    """
+
+    seed: int
+    # ORS が返した周回そのものの距離。接近区間は含まない
+    loop_m: float
+    # 起点からスナップ先までの距離。geo.haversine で generation が算出する
+    approach_m: float
+    # ループ区間のみの獲得標高／下り（AC-03-3 の注記の根拠）
+    ascent_m: float
+    descent_m: float
+    target_m: int
+    geometry: tuple[LatLon, ...]
+
+    @property
+    def total_m(self) -> float:
+        """合計距離（AC-01-2 / AC-02-1）。接近区間は往復するので2回足す。"""
+        return self.loop_m + self.approach_m * 2
+
+    @property
+    def error_m(self) -> float:
+        """距離誤差（AC-02-2）。符号付き。負なら不足、正なら超過。"""
+        return self.total_m - self.target_m
+
+    @property
+    def abs_error_m(self) -> float:
+        """距離誤差の絶対値（AC-01-4 の「誤差最小」の比較に使う）。"""
+        return abs(self.error_m)
+
+    @property
+    def is_within_tolerance(self) -> bool:
+        """在庫に入れてよいか（AC-01-2）。「±300m 以内」なので境界を含む。"""
+        return self.abs_error_m <= TOLERANCE_M
+
+    @property
+    def is_degenerate(self) -> bool:
+        """異常値か（AC-01-5）。「3倍を超える」なのでちょうど3倍は含まない。"""
+        return self.total_m > self.target_m * DEGENERATE_FACTOR
