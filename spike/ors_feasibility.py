@@ -229,10 +229,37 @@ def call(
     if row.actual_m > target_m * DEGENERATE_FACTOR:
         path = OUT_DIR / f"{stamp}_degenerate_{stage}_seed{seed}_len{length_m}.json"
         path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+            json.dumps(redact_geometry(payload), ensure_ascii=False, indent=2),
+            encoding="utf-8",
         )
-        row.note = f"異常ルート。本体を保存: {path.name}"
+        row.note = f"異常ルート。本体を保存（座標は相対化）: {path.name}"
     return row
+
+
+def redact_geometry(payload: dict[str, Any]) -> dict[str, Any]:
+    """絶対座標を落として保存できる形にする。
+
+    異常ルートの原因を見るのに必要なのは「形と規模」であって絶対位置ではない。
+    先頭点を原点とする相対座標に変換すれば、起点（＝自宅の近傍）を書き出さずに
+    診断できる。bbox も絶対座標なので削る。
+    """
+    redacted = json.loads(json.dumps(payload))
+    redacted.pop("bbox", None)
+    for feature in redacted.get("features", []):
+        feature.pop("bbox", None)
+        coords = feature.get("geometry", {}).get("coordinates")
+        if not coords:
+            continue
+        base_lon, base_lat = coords[0][0], coords[0][1]
+        feature["geometry"]["coordinates"] = [
+            [round(c[0] - base_lon, 6), round(c[1] - base_lat, 6), *c[2:]]
+            for c in coords
+        ]
+    redacted["_note"] = (
+        "座標は先頭点を原点とする相対値（度）。絶対位置は意図的に除去している。"
+        "bbox も削除済み。形と規模の診断にのみ使う。"
+    )
+    return redacted
 
 
 def print_table(rows: list[Row], *, show_seed_length: bool = True) -> None:
