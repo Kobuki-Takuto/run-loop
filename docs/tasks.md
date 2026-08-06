@@ -174,7 +174,7 @@ design.md 2.1 / 2.2 / 2.3 / 5.1、requirements.md AC-01-2 / AC-01-5 / AC-02-1 / 
 
 ## T03: ports.py（RouteProvider Protocol とドメイン例外）
 
-状態: 進行中
+状態: 完了
 
 ### 目的
 
