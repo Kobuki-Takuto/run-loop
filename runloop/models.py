@@ -270,3 +270,46 @@ class GenerationOutcome:
     # キャッシュを使わなかった実行と、1本も測れなかった実行では False
     # （比べる相手が無い／観測できていないことを「ずれていた」と言わない）
     cache_diverged: bool
+
+
+# --- 選択の結果（selection.py の成果。design.md 5.1 / 5.2） -----------------
+
+
+class SelectionOutcome(enum.Enum):
+    """1回の選択の結論（design.md 5.2）。
+
+    `NO_CANDIDATE` と `ORIGIN_REJECTED` を分けるのは、次にすべき操作が違うため。
+    前者は「もう一度探す」、後者は「最寄りの道路上をクリックする」（AC-01-3）。
+    生成側が候補を0本にして返すと、この2つが画面上で区別できなくなる。
+    """
+
+    # ±300m を満たす候補があり、その中から選んだ（AC-01-2 / AC-03-2）
+    IN_TOLERANCE = "in_tolerance"
+    # ±300m が0件で、誤差最小の1本を条件未達として出す（AC-01-4）
+    COMPROMISED = "compromised"
+    # 異常値の除外まで済ませて0件（AC-06-3）
+    NO_CANDIDATE = "no_candidate"
+    # 接近距離が 300m 超。候補があっても表示しない（AC-01-3）
+    ORIGIN_REJECTED = "origin_rejected"
+
+
+@dataclass(frozen=True)
+class SelectionResult:
+    """選択の結果（design.md 2.4）。
+
+    **選ばれた1本だけでなく在庫も返す。** 引き直し（AC-08-1）は在庫の次の1本を
+    出す操作であり、初回選択と同じ順序を使う。並び順を選択側で確定させ、
+    引き直し側では並べ替えない（AC-08-1「ランダムではない」）。
+
+    `chosen` は在庫の先頭と同一のオブジェクトである（別々に選ぶと、
+    引き直し1回目で初回と同じコースが出る経路ができる）。
+    妥協パス（`COMPROMISED`）では `chosen` があって在庫は空になる——
+    在庫は定義上 ±300m を通過した候補だけで、AC-08-4 が
+    「在庫が尽きたときに ±300m 未満の候補で埋めることはしない」と定めている。
+    """
+
+    chosen: Candidate | None
+    stock: tuple[Candidate, ...]
+    outcome: SelectionOutcome
+    # 異常値として除外した件数（AC-01-5）。実測では 2/23 件
+    degenerate_count: int
