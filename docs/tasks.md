@@ -174,7 +174,7 @@ design.md 2.1 / 2.2 / 2.3 / 5.1、requirements.md AC-01-2 / AC-01-5 / AC-02-1 / 
 
 ## T03: ports.py（RouteProvider Protocol とドメイン例外）
 
-状態: 未着手
+状態: 進行中
 
 ### 目的
 
@@ -191,11 +191,34 @@ T02
 
 ### 完了条件
 
-- [ ] `RouteProvider` Protocol に `round_trip()` と `snap()` の2メソッドがある（design.md 3.1）
-- [ ] design.md 3.2 の翻訳表の6例外（`ApiKeyMissing` / `ApiKeyRejected` / `RouteNotFound` / `RateLimited` / `ProviderUnavailable` / `MalformedRoute`）が定義され、基底 `RouteProviderError` を共有している
-- [ ] フェイクのプロバイダが Protocol に適合し `mypy` が通る
-- [ ] 異常ルート（合計距離が目標の3倍超）を例外にしていない。AC-01-5「除外した候補は AC-01-4 の妥協パスでも表示しない」は選択側（T10）の責務
-- [ ] プロバイダが目標距離・±300m・3倍・接近距離の閾値を知らない（design.md 3.1「責務の境界」）
+- [x] `RouteProvider` Protocol に `round_trip()` と `snap()` の2メソッドがある（design.md 3.1）
+- [x] design.md 3.2 の翻訳表の6例外（`ApiKeyMissing` / `ApiKeyRejected` / `RouteNotFound` / `RateLimited` / `ProviderUnavailable` / `MalformedRoute`）が定義され、基底 `RouteProviderError` を共有している
+- [x] フェイクのプロバイダが Protocol に適合し `mypy` が通る
+- [x] 異常ルート（合計距離が目標の3倍超）を例外にしていない。AC-01-5「除外した候補は AC-01-4 の妥協パスでも表示しない」は選択側（T10）の責務
+- [x] プロバイダが目標距離・±300m・3倍・接近距離の閾値を知らない（design.md 3.1「責務の境界」）
+- [x] テストを先に書き、失敗を確認してから実装した
+
+### 実装メモ
+
+- **`ProviderRoute` と `SnapResult` は `models.py` に置いた。** Protocol の戻り値型なので
+  T03 で必要になるが、design.md 1.2 は `ports.py` を「Protocol とドメイン例外の定義」と
+  定めており、データ構造は `models.py` の担当。`LatLon` / `RouteQuery` / `Candidate` と
+  同じ場所に揃える判断（2026-08-06 承認）
+- **`ProviderRoute.steps`（`RawStep`）は T06 で追加する。** design.md 2.1 はフィールドに
+  挙げているが、maneuver 種別をドメインの型でどう表すかの判断材料が T06 の fixture と
+  T11 のホワイトリストにある。**T02 で `Candidate.turns` を T11 に回したのと同じ理由**で、
+  テストの根拠がない型を先に置かない
+- `ProviderRoute` に `approach_m` を持たせていない。接近距離は起点との差であり
+  プロバイダの成果物ではない（design.md 3.1）。テストでフィールドの不在を固定した
+- `RouteProviderError` が `ratelimit_remaining` をキーワード専用で受ける
+  （メッセージの第2引数と取り違えないため）。既定は `None` で、代わりの数を埋めない
+- `RouteProvider` を `runtime_checkable` にした。**メソッドの有無しか見ない**ので
+  静的な適合は mypy が担保する。テストでは「`snap()` を欠いた実装が適合しない」ことに使う
+- **例外がちょうど6件であることをテストで固定した。** 1件ずつ `issubclass` を見るだけだと、
+  あとから「異常ルート用の例外」が増えても気づけない（AC-01-5 の除外は T10 の責務）
+- 実装後、故意に壊した7パターン（Protocol から `snap()` を落とす・7件目の例外を足す・
+  基底から外す・残数を落とす・ドメイン閾値を import する・`approach_m` を持たせる・
+  `frozen` を外す）で、意図したテストが落ちることを確認した
 
 ### 参照
 

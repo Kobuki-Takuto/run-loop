@@ -121,3 +121,50 @@ class Candidate:
     def is_degenerate(self) -> bool:
         """異常値か（AC-01-5）。「3倍を超える」なのでちょうど3倍は含まない。"""
         return self.total_m > self.target_m * DEGENERATE_FACTOR
+
+
+# --- プロバイダの境界の値（ports.py の Protocol の戻り値。design.md 3.1） ------
+
+
+@dataclass(frozen=True)
+class SnapResult:
+    """`RouteProvider.snap()` の結果（design.md 3.1）。
+
+    起点確定時のプローブ（design.md 4.6.1）で使う。**半径内に道路がない場合は
+    この型を返さず `None` を返す**（`snapped_distance_m = 0.0` と区別する。
+    圏外の文言には距離を含めないため。design.md 4.6.1 / 10.1）。
+    """
+
+    snapped_distance_m: float
+    # 道の名前。ORS の `"-"` は `ors/mapper.py` が None に正規化する（AC-04-4）
+    name: str | None = None
+
+
+@dataclass(frozen=True)
+class ProviderRoute:
+    """プロバイダが返した1本のルート。**ドメインの候補ではなく生の成果である。**
+
+    `Candidate` との違いは2つある。
+
+    1. 接近距離を持たない。接近距離は「起点」というアプリ側の概念との差であり、
+       プロバイダの成果物ではない。`generation.py` が
+       `geo.haversine(起点, snapped_start)` で算出する（design.md 3.1 / 4.4）
+    2. 目標距離を持たない。したがって距離の判定（AC-01-2）もできない。
+       判定はドメイン規則であり、プロバイダを替えても変わらない（design.md 3.1）
+
+    `steps`（`RawStep` の列）は T06 で追加する。design.md 2.1 はフィールドに
+    挙げているが、maneuver 種別の表し方を決める材料が T06 の fixture にあるため、
+    テストの根拠ができる場所で足す（`Candidate.turns` を T11 に回したのと同じ）。
+    """
+
+    seed: int
+    # 周回そのものの距離。接近区間は含まない
+    loop_m: float
+    ascent_m: float
+    descent_m: float
+    # API がルート始点として返した座標。接近距離の算出元（design.md 2.2）
+    snapped_start: LatLon
+    geometry: tuple[LatLon, ...]
+    # レスポンスヘッダの残数。画面には出さずログに出す（design.md 3.2）。
+    # 取得できなかった場合は None で、代わりの数を埋めない
+    ratelimit_remaining: int | None = None
