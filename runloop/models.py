@@ -11,6 +11,7 @@ T04 の `config.py` はここの定数を参照して公開する。
 """
 
 import enum
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
 
@@ -225,3 +226,37 @@ class ProviderRoute:
     # レスポンスヘッダの残数。画面には出さずログに出す（design.md 3.2）。
     # 取得できなかった場合は None で、代わりの数を埋めない
     ratelimit_remaining: int | None = None
+
+
+# --- 生成の結果（generation.py の成果。design.md 4.1 / 4.4） -----------------
+
+
+@dataclass(frozen=True)
+class GenerationOutcome:
+    """1回の実行で集めた候補と、その過程で観測した事実（design.md 4.1 / 4.4）。
+
+    **候補を絞らない。** 異常値の除外（AC-01-5）も並べ替え（AC-03-2）も
+    `selection.py` の責務である。生成側で落とすと、除外件数を数えて AC-06-3 の
+    判定に使う経路が作れない（`ports.py` が異常な長さを `MalformedRoute` に
+    含めないのと同じ理由）。
+
+    **拒否（`REJECT`）でも候補を空にしない。** 「300m 超なら結果を表示しない」は
+    選択の結論であって生成の都合ではなく、候補を0本にして返すと「起点が悪い」と
+    「ルートが見つからない」（AC-06-3）が画面上で区別できなくなる（design.md 5.2）。
+
+    `approach_m` と `verdict` が `None` なのは「**1本も測れなかった**」ことを表す。
+    0m や `REJECT` で埋めない。0m は「起点が道路の上にある」、`REJECT` は
+    「起点が遠い」という別の事実であり、観測できていないことと区別する。
+    """
+
+    candidates: tuple[Candidate, ...]
+    # 接近距離（AC-01-3 の文言に使う）。1本も応答が得られなければ None
+    approach_m: float | None
+    verdict: ApproachVerdict | None
+    # 失敗の内訳（例外の型の名前 → 件数）。ログに出し、画面には出さない
+    failures: Mapping[str, int]
+    # directions を呼んだ回数（= 無料枠の消費。非機能要件「15 回以内」）。
+    # 429 の投げ直しは枠を消費しないので、ここには現れない（design.md 4.3）
+    calls_consumed: int
+    # 接近ゲートで2段目を投げずに終えたか（design.md 4.1 の打ち切り）
+    aborted_early: bool
