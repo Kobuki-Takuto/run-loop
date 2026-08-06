@@ -118,11 +118,20 @@ ui/  ──▶ generation / selection / checkpoints / messages / session / persi
 | `GenerationOutcome` | 不変値 | `candidates` `approach_m` `verdict` `failures: Mapping[str, int]` `calls_consumed` `aborted_early: bool` |
 | `SelectionResult` | 不変値 | `chosen: Candidate \| None` `stock: tuple[Candidate, ...]` `outcome: SelectionOutcome` `degenerate_count` |
 | `SelectionOutcome` | 列挙 | `IN_TOLERANCE` / `COMPROMISED` / `NO_CANDIDATE` / `ORIGIN_REJECTED` |
-| `RunSession` | 可変（1つだけ） | `query` `stock` `cursor` `approach_m` `outcome` `generated_at` |
+| `RunSession` | 不変値（1つだけ） | `query` `selection: SelectionResult` `cursor` `approach_m` `generated_at`（`stock` / `outcome` / `current` は読み出し） |
 
-すべて `frozen=True` のデータクラス（`RunSession` を除く）。
+すべて `frozen=True` のデータクラス。
 **理由:** 候補は生成後に書き換えない。不変にすると、在庫を並べ替えても
 元の候補が壊れないことが型で保証され、テストの前提が単純になる。
+
+**`RunSession` を「可変」から「不変」に直した**（2026-08-06、T13）。本表は当初
+`RunSession` だけを可変としていたが、6.1 の本文は「1つの不変オブジェクトに
+まとめて差し替えるだけにする」と書いており食い違っていた。6.1 の理由
+（状態を複数のキーに分けると片方だけ更新される事故が起きる）を採り、
+遷移は書き換えではなく差し替えとする。**`stock` と `outcome` を
+フィールドから読み出しに変えた**のも同じ回で、妥協パス（AC-01-4）は
+在庫が空のまま1本を表示するため、`stock` と表示する1本を別々に持つと
+二重管理になる。`SelectionResult` を1つ持てば出どころが1か所で済む（6.1）。
 
 ### 2.2 合計距離は `Candidate` の計算プロパティにする
 
@@ -604,14 +613,20 @@ AC-01-3「300m 超なら結果を表示せず拒否する」を破る。
 
 `RunSession`（`session.py`）が1つだけ状態を持つ。
 
-| フィールド | 内容 |
-|---|---|
-| `query` | 起点と目標距離（在庫の有効性の判定に使う） |
-| `stock` | 在庫（獲得標高の昇順。生成後は不変） |
-| `cursor` | 現在表示している位置（0 始まり） |
-| `approach_m` | この実行の接近距離（全候補共通） |
-| `outcome` | `IN_TOLERANCE` / `COMPROMISED` など |
-| `generated_at` | 生成時刻（ログとデバッグ用） |
+| 名前 | 種別 | 内容 |
+|---|---|---|
+| `query` | フィールド | 実行の条件（在庫の有効性の判定に使う） |
+| `selection` | フィールド | 選択の結果（`SelectionResult`。在庫と結論の出どころ） |
+| `cursor` | フィールド | 現在表示している位置（0 始まり） |
+| `approach_m` | フィールド | この実行の接近距離（全候補共通） |
+| `generated_at` | フィールド | 生成時刻（ログとデバッグ用） |
+| `stock` | 読み出し | 在庫（獲得標高の昇順。生成後は不変） |
+| `outcome` | 読み出し | `IN_TOLERANCE` / `COMPROMISED` など |
+| `current` | 読み出し | いま表示している1本。在庫があれば `stock[cursor]`、無ければ `selection.chosen` |
+
+**在庫と結論を `SelectionResult` から読み出すのは、妥協パス（AC-01-4）が
+在庫を空にしたまま1本を表示するためである**（T13）。`stock` と表示する1本を
+別々のフィールドに持つと、同じ事実が2か所に分かれて片方だけ更新されうる。
 
 Streamlit 層はこれを `st.session_state["run"]` に1つ置くだけにする。
 
@@ -629,12 +644,18 @@ AC-08-2（引き直しで API を呼ばない）が守れない。
 | 実行（探す） | 15本投げて在庫を作る。`cursor = 0` | AC-01-1 |
 | 引き直し | `cursor + 1` が在庫内なら進める。**API は呼ばない** | AC-08-1 / AC-08-2 |
 | 引き直し（在庫の末尾） | `cursor` を動かさず「これ以上の候補がない」と表示 | AC-08-3 |
-| 起点または目標距離が変わった | 在庫を破棄する（`RunSession` を捨てる） | — |
+| `RouteQuery` が変わった | 在庫を破棄する（`RunSession` を捨てる） | — |
 | もう一度探す | 新しいシードで再実行（API を呼ぶ操作として明示） | AC-08-3 の次の行動 |
 
 **在庫を条件変更で破棄する理由。** 目標 5km の在庫は 3km の ±300m を
 満たさない。条件が変わった在庫から出すと AC-08-4（引き直しでも ±300m）が壊れる。
 `query` を在庫の鍵として持つのはこの判定のためである。
+
+**鍵は `RouteQuery` 全体の一致とする**（2026-08-06、T13。当初は
+「起点または目標距離が変わった」としていた）。`avoid_steps` を外して集めた在庫は
+AC-03-1（生成されるコースに階段が含まれない）の前提が違い、距離は満たしていても
+出してよい在庫ではない。**破棄すべき条件を数え上げるより、条件そのものの一致で
+判定するほうが、条件が増えたときに取りこぼさない。**
 
 **妥協パス（`COMPROMISED`）では在庫が空になる。** 在庫は定義上
 ±300m を通過した候補だけなので、誤差最小の1本は在庫に入れない。
