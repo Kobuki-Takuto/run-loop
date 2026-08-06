@@ -140,6 +140,60 @@ class SnapResult:
     name: str | None = None
 
 
+class Maneuver(enum.Enum):
+    """道なりの案内の種別（design.md 7.1）。
+
+    **番号との対応はここに書かない。** ORS は 0〜13 の整数で表すが、それは
+    ORS 固有の知識であり `ors/mapper.py` の対応表に閉じる（design.md 1.2）。
+    値を `TURN_LEFT = 0` にすると番号がドメインの型に焼き付き、番号体系の違う
+    サービスを足すときに `models.py` を触ることになる。
+
+    **どれが方向転換かはここでも `ors/` でも決めない。** AC-04-4 の
+    ホワイトリスト（0〜5 に相当する6種のみ）は `checkpoints.py` の責務である
+    （T11）。要件由来の規則を、プロバイダの都合を閉じる層に置かないため。
+
+    `KEEP_LEFT` / `KEEP_RIGHT` は分岐でどちら側に留まるかの案内で、
+    進行方向は変わらない。`UNKNOWN` は「対応表にない種別が来た」ことを表し、
+    **異常ではない**（未観測の種別が来る前提で設計している。design.md 7.1）。
+    """
+
+    TURN_LEFT = "turn_left"
+    TURN_RIGHT = "turn_right"
+    SHARP_LEFT = "sharp_left"
+    SHARP_RIGHT = "sharp_right"
+    SLIGHT_LEFT = "slight_left"
+    SLIGHT_RIGHT = "slight_right"
+    STRAIGHT = "straight"
+    KEEP_LEFT = "keep_left"
+    KEEP_RIGHT = "keep_right"
+    DEPART = "depart"
+    ARRIVE = "arrive"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class RawStep:
+    """プロバイダが返した案内1件。**そのまま画面に出す形ではない。**
+
+    `distance_m` は**その step 単体の距離**であって累積ではない。累積を積み、
+    接近距離のオフセットを足して `Checkpoint` にするのは `checkpoints.py` の
+    仕事である（design.md 7.1 / 7.2）。ここで累積に変えると、オフセットを
+    足す場所が1か所に定まらなくなる（design.md 2.3）。
+
+    `position` は案内が始まる地点。プロバイダの応答では geometry への添字で
+    表されるが、その解決は `ors/mapper.py` が済ませる（添字の扱いは
+    ORS 固有の知識であり、上位に出さない）。
+
+    `name` は道の名前。取得できないのが通常で（実測 71/71 = 100% が名前なし。
+    design.md 7.1）、`None` は異常ではない（AC-04-4）。
+    """
+
+    distance_m: float
+    maneuver: Maneuver
+    position: LatLon
+    name: str | None = None
+
+
 @dataclass(frozen=True)
 class ProviderRoute:
     """プロバイダが返した1本のルート。**ドメインの候補ではなく生の成果である。**
@@ -152,9 +206,10 @@ class ProviderRoute:
     2. 目標距離を持たない。したがって距離の判定（AC-01-2）もできない。
        判定はドメイン規則であり、プロバイダを替えても変わらない（design.md 3.1）
 
-    `steps`（`RawStep` の列）は T06 で追加する。design.md 2.1 はフィールドに
-    挙げているが、maneuver 種別の表し方を決める材料が T06 の fixture にあるため、
-    テストの根拠ができる場所で足す（`Candidate.turns` を T11 に回したのと同じ）。
+    `steps` の既定を空にしているのは、**方向転換が0件のルートが異常ではない**
+    ため（design.md 7.3「0件のときは何も出さない」）。ただし応答に steps の
+    キー自体が無い場合は変換できないので `MalformedRoute` にする（T06）。
+    「案内が無いルート」と「案内を読み落とした変換」を区別する。
     """
 
     seed: int
@@ -165,6 +220,8 @@ class ProviderRoute:
     # API がルート始点として返した座標。接近距離の算出元（design.md 2.2）
     snapped_start: LatLon
     geometry: tuple[LatLon, ...]
+    # 案内の列。方向転換の抽出と間引きは checkpoints.py の責務（design.md 7.1）
+    steps: tuple[RawStep, ...] = ()
     # レスポンスヘッダの残数。画面には出さずログに出す（design.md 3.2）。
     # 取得できなかった場合は None で、代わりの数を埋めない
     ratelimit_remaining: int | None = None

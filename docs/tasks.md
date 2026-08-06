@@ -371,7 +371,7 @@ design.md 7.3（要検証）/ 10.3 / 11節 #4・#12・#13・#15
 
 ## T06: ors/mapper.py（GeoJSON → ProviderRoute）
 
-状態: 未着手
+状態: 進行中
 
 ### 目的
 
@@ -379,7 +379,9 @@ ORS のレスポンス形式に依存する知識を `ors/` の中だけに閉�
 
 ### 触るファイル
 
-`runloop/ors/mapper.py`, `tests/test_ors_mapper.py`
+`runloop/ors/mapper.py`, `tests/test_ors_mapper.py`,
+`runloop/models.py`（`Maneuver` / `RawStep` を追加、`ProviderRoute.steps`）,
+`docs/design.md` 7.1 / 7.3 / 10.3 / 11節, `spike/FINDINGS.md`（訂正6）
 
 ### 依存
 
@@ -387,12 +389,55 @@ T05（fixture）, T03
 
 ### 完了条件
 
-- [ ] fixture の JSON から `ProviderRoute` が組める（ループ距離・`ascent`／`descent`・`snapped_start`・steps・3次元座標。design.md 10.2）
-- [ ] AC-04-4「`"-"` は「名前なし」を意味する ORS の値であり、そのまま画面に出さない」→ `None` に正規化する。警告もログも出さない
-- [ ] maneuver 種別を型に変換している（方向転換かどうかの判定は T11 のホワイトリスト）
-- [ ] 想定外の JSON で `MalformedRoute` になる（design.md 10.2「壊れた JSON」）
-- [ ] ORS 固有の知識（キー名・`"-"`・type 番号）が `ors/` の外に漏れていない
-- [ ] テストを先に書き、失敗を確認してから実装した
+- [x] fixture の JSON から `ProviderRoute` が組める（ループ距離・`ascent`／`descent`・`snapped_start`・steps・3次元座標。design.md 10.2）
+- [x] AC-04-4「`"-"` は「名前なし」を意味する ORS の値であり、そのまま画面に出さない」→ `None` に正規化する。警告もログも出さない
+- [x] maneuver 種別を型に変換している（方向転換かどうかの判定は T11 のホワイトリスト）
+- [x] 想定外の JSON で `MalformedRoute` になる（design.md 10.2「壊れた JSON」）
+- [x] ORS 固有の知識（キー名・`"-"`・type 番号）が `ors/` の外に漏れていない
+- [x] テストを先に書き、失敗を確認してから実装した
+
+### 実装メモ
+
+- **type 13 は「不明」ではなく「右側維持」だった**（2026-08-06 の訂正）。fixture の
+  同じ step の `instruction` が `"Keep right"` で、type 12（`"Keep left"`）の対である。
+  T05 は `type` と件数だけを数え、隣のキーを読んでいなかった。
+  `Maneuver.KEEP_RIGHT` に変換する（`UNKNOWN` に潰さない）。
+  **ホワイトリスト（AC-04-4）の結論は変わらない**が、「意味の分からない番号が
+  5件来た」という裏づけは取り下げた。根拠は実測ではなく AC-04-4 の要求そのもの。
+  design.md 7.1 / 7.3 / 10.3 / 11節 #4 と FINDINGS 訂正6（第3次）に反映した
+- **`Maneuver` は値に番号を持たない**（`TURN_LEFT = "turn_left"`）。番号との対応表は
+  `ors/mapper.py` だけが持つ。`TURN_LEFT = 0` にすると ORS の番号体系が
+  ドメインの型に焼き付き、別サービスを足すときに `models.py` を触ることになる
+- **どれが方向転換かは `models.py` でも `ors/` でも決めていない。** ホワイトリストは
+  T11 の責務。要件由来の規則を、プロバイダの都合を閉じる層に置かないため
+  （`Maneuver.is_turn` を置いていないことをテストで固定した）
+- **`seed` と `ratelimit_remaining` は引数で受ける。** どちらも応答の本文にない。
+  seed をレスポンスの `metadata` から読むと「応答が要求を反映している」という
+  未検証の仮定が増える。残数は HTTP ヘッダにあり本文からは読めない
+- **`RawStep` は `position: LatLon` を持つ**（`way_points` の添字ではない）。
+  添字の解決を `checkpoints.py` に持ち出すと、ORS 固有の知識が `ors/` の外に出る。
+  **負の添字は Python では末尾から数えられ静かに別の地点を指す**ので範囲を検査する
+- **`ProviderRoute.steps` の既定は空タプル。** 方向転換0件は異常ではない
+  （design.md 7.3）。ただし `steps` の**キー自体が無い**のは `MalformedRoute` にして、
+  「案内が無いルート」と「案内を読み落とした変換」を区別する
+- **`/v2/snap` の応答の解析は T06 に入れていない。** T06 の完了条件はすべて
+  `ProviderRoute` の話で、snap は T07 の完了条件側にある。T02 / T03 と同じく
+  テストの根拠がある場所で足す
+- `.get(キー, 既定値)` を使わず `in` で有無を見てから `[]` で読む（T04 の禁止の対象に
+  `runloop/` 全体が入っている）。種別の変換も `.get(番号, UNKNOWN)` ではなく
+  `in` で書いた。設定の取りこぼしを静かに埋める形と見分けがつかなくなるため
+- **メッセージの検査を2件足した**（故意破壊で見つけた穴）。キーの欠落を検査せずに
+  読んでも、下流の型検査が捕まえるので `MalformedRoute` にはなる。**変わるのは
+  メッセージだけ**なので、「欠落」と「型違い」で違うことを言うこと、
+  配列の場所に文字列が来たとき「壊れているのは配列そのもの」と言うことを固定した。
+  200 が返っているのに読めないとき、手がかりはメッセージしかない
+  （応答の本文をログに出すと座標が漏れる。design.md 8.7）
+- 実装後、故意に壊した16パターン（緯度経度の取り違え・`"-"` を残す・`"-"` の
+  ログ出力・type 13 を `UNKNOWN` に・未知の種別を例外に・添字の範囲検査の除去・
+  欠落キーを `None` で埋める・`steps` のキー欠落を0件扱い・距離を累積に・
+  `snapped_start` を2点目に・`ValueError` を上げる・メッセージに座標・
+  文字列を配列として通す・`seed` の引数を無視・`Maneuver` の値を番号に・
+  ORS のキー名を `models.py` に持ち出す）で、意図したテストが落ちることを確認した
 
 ### 参照
 
