@@ -3,7 +3,7 @@
 - 版: 1.0
 - 作成日: 2026-08-05
 - 根拠: [requirements.md](requirements.md)（版1.2・確定）と [design.md](design.md)（版1.1）
-- 進め方: [WORKFLOW.md](WORKFLOW.md) フェーズ4（1タスク = 1ブランチ = 1PR、半日以内）
+- 進め方: [WORKFLOW.md](WORKFLOW.md) フェーズ4（1タスク = 1ブランチ、半日以内）
 
 **状態はこのファイルだけで管理する。** 各タスクの先頭の `状態:` を書き換えて進める。
 一覧表に状態を持たせないのは、2か所に書くと必ず食い違うため。
@@ -12,7 +12,7 @@
 |---|---|
 | 未着手 | まだ手を付けていない |
 | 進行中 | ブランチを切って作業中 |
-| 完了 | PR をマージし、完了条件をすべて満たした |
+| 完了 | 変更が main に入り、完了条件をすべて満たした（PR 経由でも main への直接マージでもよい） |
 
 ## 着手前に決めたこと（2026-08-05 承認）
 
@@ -60,7 +60,7 @@ T10〜T14 は互いに独立で、T02 が終われば並行できる（T10 は T
 
 - [ ] `uv run pytest` / `uv run ruff check .` / `uv run mypy .` が通る（design.md 10.5）
 - [ ] 差分を自分で読んで理解している（WORKFLOW.md フェーズ4）
-- [ ] 1タスク = 1ブランチ = 1PR、半日以内
+- [ ] 1タスク = 1ブランチ、半日以内
 
 ---
 
@@ -113,7 +113,7 @@ design.md 1.1 / 1.2 / 10.5、WORKFLOW.md フェーズ0・6
 
 ## T02: models.py と geo.py（合計距離を計算プロパティにする）
 
-状態: 進行中
+状態: 完了
 
 ### 目的
 
@@ -182,7 +182,8 @@ design.md 2.1 / 2.2 / 2.3 / 5.1、requirements.md AC-01-2 / AC-01-5 / AC-02-1 / 
 
 ### 触るファイル
 
-`runloop/ports.py`, `tests/test_ports.py`
+`runloop/ports.py`, `runloop/models.py`（`ProviderRoute` / `SnapResult` を追加）,
+`tests/test_ports.py`
 
 ### 依存
 
