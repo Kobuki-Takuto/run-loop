@@ -451,7 +451,7 @@ design.md 1.2 / 7.1 / 10.2、requirements.md AC-04-4
 
 ## T07: ors/client.py（1回の呼び出しとステータスの翻訳）
 
-状態: 進行中
+状態: 完了
 
 ### 目的
 
