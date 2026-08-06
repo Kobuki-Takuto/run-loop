@@ -10,6 +10,7 @@ dependencies = [
     "requests>=2.34.2",
     "streamlit>=1.60.0",
     "streamlit-folium>=0.27.4",
+    "streamlit-js-eval>=1.0.0",
 ]
 
 [dependency-groups]
@@ -54,6 +55,14 @@ python_version = "3.13"
 strict = true
 # 使い捨てのスパイクスクリプトは型チェックの対象外（本体から参照しない）
 exclude = ['^spike/', '^\.venv/']
+
+[[tool.mypy.overrides]]
+# streamlit-js-eval は型情報（py.typed）を同梱していない。
+# 個別に緩めるのは、これに触るのが runloop/local_storage.py の1行だけで、
+# 呼び出し側は自前の JsEvaluator Protocol で型を付け直しているため（design.md 8.1）。
+# strict は全体では外さない。
+module = ["streamlit_js_eval.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
