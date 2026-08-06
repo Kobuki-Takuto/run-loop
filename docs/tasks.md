@@ -371,7 +371,7 @@ design.md 7.3（要検証）/ 10.3 / 11節 #4・#12・#13・#15
 
 ## T06: ors/mapper.py（GeoJSON → ProviderRoute）
 
-状態: 進行中
+状態: 完了
 
 ### 目的
 
