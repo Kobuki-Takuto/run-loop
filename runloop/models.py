@@ -247,6 +247,10 @@ class GenerationOutcome:
     `approach_m` と `verdict` が `None` なのは「**1本も測れなかった**」ことを表す。
     0m や `REJECT` で埋めない。0m は「起点が道路の上にある」、`REJECT` は
     「起点が遠い」という別の事実であり、観測できていないことと区別する。
+
+    `approach_m` と `verdict` は**どちらの経路でも各応答の実測から出す**
+    （design.md 4.6.3）。キャッシュを使う経路 A でも、キャッシュ値はゲートを
+    飛ばす判断にしか使わない。
     """
 
     candidates: tuple[Candidate, ...]
@@ -260,3 +264,9 @@ class GenerationOutcome:
     calls_consumed: int
     # 接近ゲートで2段目を投げずに終えたか（design.md 4.1 の打ち切り）
     aborted_early: bool
+    # スナップ距離のキャッシュを破棄すべきか（design.md 8.5.1 の乖離検出）。
+    # 実測がキャッシュから 10m を超えて離れたときだけ True。**破棄するのは
+    # 呼び出し側**で、生成側は保存先を知らない（design.md 8.3 のポート）。
+    # キャッシュを使わなかった実行と、1本も測れなかった実行では False
+    # （比べる相手が無い／観測できていないことを「ずれていた」と言わない）
+    cache_diverged: bool
