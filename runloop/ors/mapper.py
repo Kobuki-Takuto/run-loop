@@ -1,4 +1,8 @@
-"""ORS の GeoJSON を `ProviderRoute` に読み替える（design.md 1.2 / 7.1、AC-04-4）。
+"""ORS の応答をドメインの型に読み替える（design.md 1.2 / 7.1 / 4.6.1、AC-04-4）。
+
+directions の GeoJSON を `ProviderRoute` に、`/v2/snap` の JSON を `SnapResult` に
+する。形はまったく違うが、どちらも「ORS の応答の読み方」であり、`"-"` の正規化と
+`MalformedRoute` への翻訳を共有する。
 
 **ORS のレスポンス形式に依存する知識は、このモジュールの中だけに置く。**
 キー名（`features` / `segments` / `way_points` ...）、`"-"` が「名前なし」を
@@ -19,7 +23,7 @@
 from collections.abc import Mapping, Sequence
 from typing import Final, NoReturn
 
-from runloop.models import LatLon, Maneuver, ProviderRoute, RawStep
+from runloop.models import LatLon, Maneuver, ProviderRoute, RawStep, SnapResult
 from runloop.ports import MalformedRoute
 
 # maneuver の種別（design.md 7.1 の表）。**番号を知るのはこの対応表だけ。**
@@ -145,7 +149,7 @@ def _read_step(step: Mapping[str, object], geometry: tuple[LatLon, ...]) -> RawS
         distance_m=_number(_entry(step, "distance", "steps[]"), "steps[].distance"),
         maneuver=_read_maneuver(_integer(_entry(step, "type", "steps[]"), "steps[].type")),
         position=geometry[index],
-        name=_read_name(step),
+        name=_read_name(step, "steps[]"),
     )
 
 
@@ -161,21 +165,61 @@ def _read_maneuver(ors_type: int) -> Maneuver:
     return Maneuver.UNKNOWN
 
 
-def _read_name(step: Mapping[str, object]) -> str | None:
+def _read_name(entry: Mapping[str, object], where: str) -> str | None:
     """道の名前を読む。`"-"` は「名前なし」なので `None` にする（AC-04-4）。
+
+    案内（`steps[]`）と `/v2/snap` の `locations[0]` の両方で使う。どちらも
+    「名前が無い」ことを `"-"` で表すのは ORS の同じ都合なので、正規化を
+    2か所に分けない。
 
     **警告もログも出さない。** 実測では 71/71 = 100% が `"-"` で、名前が無いことは
     異常ではなく通常である（design.md 7.1）。1件ずつ記録すると、本当に見たい
     ログ（残数・失敗の内訳）が埋もれる。
     """
-    if "name" not in step:
+    if "name" not in entry:
         return None
-    value: object = step["name"]
+    value: object = entry["name"]
     if value is None or value == _NO_NAME:
         return None
     if not isinstance(value, str):
-        _fail("steps[].name が文字列ではない")
+        _fail(f"{where}.name が文字列ではない")
     return value
+
+
+# --- `/v2/snap` の応答（design.md 4.6.1。T07 で追加） -------------------------
+
+
+def to_snap_result(payload: object) -> SnapResult | None:
+    """`/v2/snap` の応答を `SnapResult` にする。**半径内に道路がなければ `None`。**
+
+    directions とは URL の形だけでなく**応答の読み方も別**である。GeoJSON では
+    なく `locations` の配列で、要求した点ごとに1件返る（`/geojson` を付けると
+    406。design.md 4.6.1 / 11節 #15）。本体は1点しか送らないので先頭だけを見る。
+
+    `null` は「半径内に道路なし」という**意味のある値**であって壊れた応答では
+    ないので、`MalformedRoute` にしない。同時に
+    `snapped_distance_m = 0.0`（道路の真上）とも区別する。区別が画面の文言に効く
+    ——圏外では距離を言えないので、距離を含まない変種を出す（design.md 9.1、T12）。
+
+    スナップ先の座標（`location`）は読まない。`SnapResult` が持たないためで、
+    起点との差は `snapped_distance` として返ってくる。
+    """
+    document = _mapping(payload, "応答")
+    locations = _sequence(_entry(document, "locations", "応答"), "locations")
+    if not locations:
+        _fail("locations が空")
+
+    entry = locations[0]
+    if entry is None:
+        return None
+
+    location = _mapping(entry, "locations[0]")
+    return SnapResult(
+        snapped_distance_m=_number(
+            _entry(location, "snapped_distance", "locations[0]"), "snapped_distance"
+        ),
+        name=_read_name(location, "locations[0]"),
+    )
 
 
 # --- 読み取りの土台（想定外の形はここで `MalformedRoute` になる） -------------
