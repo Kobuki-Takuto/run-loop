@@ -166,12 +166,22 @@ def _search(
     outcome = generate(provider, query, cached_approach_m=cached_approach_m)
     elapsed = time.monotonic() - started
 
+    path = "A（キャッシュ利用）" if cached_approach_m is not None else "B（二段投入）"
     _LOG.info(
         "実行: %.1f 秒 / 消費 %d 回 / 候補 %d 本 / 経路%s",
         elapsed,
         outcome.calls_consumed,
         len(outcome.candidates),
-        "A（キャッシュ利用）" if cached_approach_m is not None else "B（二段投入）",
+        path,
+    )
+    # **画面の折りたたみにも出す**（2026-08-07 承認）。非機能要件（10秒以内・
+    # 15回以内）は実測しないと確かめようがないが、ログが利用者の手元の
+    # ターミナルに出るかは環境に依存し、こちらから保証できなかった。
+    # design.md 9.2「画面には行動可能な文言だけ」の例外で、**畳んだ中**に置く
+    # ことで主要な画面を汚さない。**失敗の内訳は入れない**（design.md 4.4）
+    st.session_state["run_log"] = (
+        f"所要 {elapsed:.1f} 秒 ／ API 消費 {outcome.calls_consumed} 回 ／ "
+        f"候補 {len(outcome.candidates)} 本 ／ 経路{path}"
     )
 
     if outcome.cache_diverged:
@@ -316,6 +326,12 @@ with map_slot:
 
 if run is not None:
     _show_result(run, checkpoints)
+
+run_log: str | None = st.session_state.get("run_log")
+if run_log is not None:
+    # 非機能要件（10秒以内・15回以内）を実測するための欄。**畳んでおく**
+    with st.expander("実行の記録"):
+        st.text(run_log)
 
 last_clicked = result.get("last_clicked")
 if last_clicked is not None:
