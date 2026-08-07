@@ -532,6 +532,57 @@ def test_route_not_found_is_sent_only_once(
     assert no_wait == []
 
 
+@pytest.mark.parametrize("timeout_error", [requests.ReadTimeout, requests.ConnectTimeout])
+def test_timeout_is_sent_only_once(
+    timeout_error: type[requests.RequestException],
+    mocked: responses.RequestsMock,
+    no_wait: list[float],
+) -> None:
+    """**タイムアウトは投げ直さない**（2026-08-07、要検証 #17）。
+
+    タイムアウトは 8.0 秒（`REQUEST_TIMEOUT_S`）待ってから起きる。投げ直すと
+    **8 + 8 = 16 秒**かかり、**10 秒の性能要件を破る**（requirements.md 7節）。
+    経路 A は15本を同時に投げるので、この1本が実行全体を決めてしまう。
+
+    **接続エラーとは分けて扱う**（下のテストが対照）。接続拒否や名前解決の失敗は
+    即座に返るので、投げ直しても時間を食わない。**「待ってから失敗したか」で
+    分ける**のであって、例外の型でリトライを決めているのではない（design.md 4.3）。
+
+    `ConnectTimeout` も対象にするのは、`timeout` を単一の値で渡すと接続と読み取りの
+    両方に効くためである（8秒待ってから失敗する点は `ReadTimeout` と同じ）。
+
+    欠測として続行するのは 404 と同じ扱いで、design.md 4.4 と整合する。
+    """
+    mocked.add(responses.POST, DIRECTIONS_URL, body=timeout_error("too slow"))
+    mocked.add(responses.POST, DIRECTIONS_URL, body=timeout_error("too slow"))
+
+    with pytest.raises(ProviderUnavailable):
+        call_round_trip(make_client())
+
+    assert len(mocked.calls) == 1, "タイムアウトを投げ直している（16 秒かかりうる）"
+    assert no_wait == []
+
+
+def test_connection_error_is_still_retried_once(
+    mocked: responses.RequestsMock, no_wait: list[float], route_payload: dict[str, Any]
+) -> None:
+    """接続エラーは**これまでどおり1回投げ直す**（design.md 4.3）。
+
+    タイムアウトだけを分けたことの対照。ここまで一緒に止めてしまうと、
+    一過性の接続失敗を吸収できなくなる（こちらは待たずに失敗するので、
+    投げ直しても 10 秒要件を脅かさない）。
+    """
+    mocked.add(responses.POST, DIRECTIONS_URL, body=requests.ConnectionError("boom"))
+    mocked.add(responses.POST, DIRECTIONS_URL, json=route_payload, status=200)
+
+    route = call_round_trip(make_client())
+
+    assert len(mocked.calls) == 2, "接続エラーを投げ直していない"
+    assert isinstance(route, ProviderRoute)
+    assert route.seed == SEED
+    assert no_wait == []
+
+
 @pytest.mark.parametrize("status", [401, 403])
 def test_rejected_key_is_sent_only_once(
     status: int, mocked: responses.RequestsMock, no_wait: list[float]

@@ -156,7 +156,20 @@ class OrsClient:
             except requests.RequestException as exc:
                 # 接続できない、または8秒で打ち切った（design.md 4.5）。
                 # 例外の文言をそのまま載せず、種類の名前だけにする
-                if sends <= _RETRY_LIMIT:
+                #
+                # **タイムアウトは投げ直さない**（2026-08-07、要検証 #17）。
+                # タイムアウトは 8.0 秒待ってから起きるので、投げ直すと
+                # 8 + 8 = 16 秒かかり、**10 秒の性能要件を破る**
+                # （requirements.md 7節）。経路 A は15本を同時に投げるため、
+                # この1本が実行全体の所要を決めてしまう。欠測として続行するのは
+                # 404 と同じ扱いで、design.md 4.4 と整合する。
+                #
+                # **分けているのは「待ってから失敗したか」であって例外の型ではない**
+                # （design.md 4.3 の規律）。接続拒否や名前解決の失敗は即座に返るので、
+                # 投げ直しても 10 秒要件を脅かさない。`ConnectTimeout` も含めるのは、
+                # `timeout` を単一の値で渡すと接続と読み取りの両方に効くためである。
+                timed_out = isinstance(exc, requests.Timeout)
+                if not timed_out and sends <= _RETRY_LIMIT:
                     _LOG.debug("%s に到達できず、待たずに投げ直す（%d 回目）", what, sends)
                     continue
                 raise ProviderUnavailable(
