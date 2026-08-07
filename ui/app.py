@@ -195,7 +195,14 @@ def _confirm_origin(
     # 起点が変われば在庫の前提が変わる（design.md 6.2）。**新しい起点の
     # 画面に古いコースを残さない**——`is_stale` でも落ちるが、確定した
     # 時点で捨てるほうが「いつ消えたか」が1か所に見える
-    st.session_state["run"] = None
+    _discard_run()
+    # **乖離の記録も起点に紐づく。** キャッシュが実測とずれていたのは
+    # 「その起点の」事実であって、新しい起点には無関係である
+    # （design.md 8.5 条件1「起点が変わったら新しい起点でプローブし直す」）。
+    # 消さないと、一度乖離しただけでそのセッションの以後すべての実行が
+    # 経路 B に落ち、**気づけないまま所要時間だけが倍になる**
+    # （T19 の `/code-review` で発見）
+    st.session_state["cache_diverged"] = False
     return record
 
 
@@ -292,6 +299,23 @@ def _run_search(
         return None
 
 
+def _discard_run() -> None:
+    """在庫と、その実行の記録を**まとめて**捨てる。
+
+    別々に捨てると片方だけ残る。実際に「実行の記録」だけが残り、目標距離を
+    変えて在庫を捨てたあとも前の距離での記録が出ていた（T19 の
+    `/code-review` で発見）。**この欄は非機能要件（10秒以内・15回以内）を
+    実測するためのもの**なので、どの実行のものか分からないと計測の根拠に
+    ならない——要検証 #1 に誤ったデータが入る。
+
+    捨てるのは「在庫が無効になった」ときだけで、**実行が失敗したときは
+    呼ばない。** 失敗時は前の結果（コース）を残す（AC-06-4）ので、
+    記録も前の実行のものが残るほうが一貫する。
+    """
+    st.session_state["run"] = None
+    st.session_state["run_log"] = None
+
+
 def _can_reroll(run: RunSession | None) -> bool:
     """引き直せるか（在庫に**次の1本**があるか。AC-08-1）。
 
@@ -327,8 +351,17 @@ def _show_result(run: RunSession, checkpoints: tuple[Checkpoint, ...]) -> None:
         # 全滅、または異常値の除外で0件（AC-06-3 / AC-01-5）。
         # **原因が分かるならそれを言う**（AC-06-1）。15本すべてが接続不能で
         # 失敗したのに「起点を道路の近くに指定し直すか」とだけ出すと、
-        # 起点は悪くないのに起点を疑わせる（2026-08-07 の実機確認で判明）
-        cause = messages.failure_summary(run.failures)
+        # 起点は悪くないのに起点を疑わせる（2026-08-07 の実機確認で判明）。
+        #
+        # **ただし失敗を主因にしてよいのは、1本も取れなかったときだけ。**
+        # 異常値の除外で0件になった実行では、候補は取れている——原因は
+        # 「その起点では適切な周回が作れない」ことであって、混ざっている
+        # 失敗ではない。除外が1件でもあれば AC-06-3 の文言に戻す
+        # （T19 の `/code-review` で発見。T18b で直した「原因が分かって
+        # いるのに違う対処を促す」問題と同じ性質なので、同じ方針で直す）
+        cause = None
+        if run.selection.degenerate_count == 0:
+            cause = messages.failure_summary(run.failures)
         st.error(cause if cause is not None else messages.no_candidate())
         return
 
@@ -412,8 +445,8 @@ query = RouteQuery(origin=origin, target_m=target_m) if origin is not None else 
 # 条件が変わった在庫は破棄する（design.md 6.2）。目標 5km の在庫は 3km の
 # ±300m を満たさず、そこから出すと AC-08-4 が壊れる
 if run is not None and query is not None and session.is_stale(run, query):
+    _discard_run()
     run = None
-    st.session_state["run"] = None
 
 search_disabled = query is None or load.state is LoadState.PENDING or settings is None
 
@@ -466,7 +499,16 @@ if reroll_clicked and run is not None:
         # 判定と `session.reroll` の判定が食い違っている**ので、記録に残す
         _LOG.debug("引き直しが在庫の末尾で止まった（ボタンの活性判定と不一致）")
 
-current_candidate = run.current if run is not None else None
+# **起点を選び直している最中は、前の実行の結果を見せない**（T19 の
+# `/code-review` で発見）。未確定のクリックは `query` を変えないので在庫は
+# 破棄されないが、そのまま描くと**新しい起点のマーカーと前の起点のコース**が
+# 同じ地図に並ぶ。`_fit_to_course` が両方を囲む範囲に寄せるので、
+# 画面上は「クリックした地点を起点とするコース」に見えてしまう。
+# 在庫は捨てない——確定すれば `_confirm_origin` が捨て、確定しなければ
+# 別の地点を選び直せる
+displayed_run = run if pending_click is None else None
+
+current_candidate = displayed_run.current if displayed_run is not None else None
 checkpoints: tuple[Checkpoint, ...] = ()
 if current_candidate is not None:
     checkpoints = select_checkpoints(
@@ -479,8 +521,8 @@ with map_slot:
     # `key` を表示するコースごとに変える。同じ `key` のままだとコンポーネントが
     # 再描画されず、探したのに古い地図が残る（AC-01-1 が画面上で満たされない）
     map_key = "map"
-    if run is not None and current_candidate is not None:
-        map_key = f"map_{run.generated_at.timestamp()}_{run.cursor}"
+    if displayed_run is not None and current_candidate is not None:
+        map_key = f"map_{displayed_run.generated_at.timestamp()}_{displayed_run.cursor}"
     result = st_folium(
         map_view.build_map(
             origin=display_origin, candidate=current_candidate, checkpoints=checkpoints
@@ -495,14 +537,16 @@ with map_slot:
         returned_objects=["last_clicked"],
     )
 
-if run is not None:
-    _show_result(run, checkpoints)
+if displayed_run is not None:
+    _show_result(displayed_run, checkpoints)
 
-run_log: str | None = st.session_state.get("run_log")
-if run_log is not None:
-    # 非機能要件（10秒以内・15回以内）を実測するための欄。**畳んでおく**
-    with st.expander("実行の記録"):
-        st.text(run_log)
+    # **記録も結果と一緒に出す。** 起点を選び直している最中は結果を
+    # 見せないので、そのときだけ記録が残るのは辻褄が合わない
+    run_log: str | None = st.session_state.get("run_log")
+    if run_log is not None:
+        # 非機能要件（10秒以内・15回以内）を実測するための欄。**畳んでおく**
+        with st.expander("実行の記録"):
+            st.text(run_log)
 
 last_clicked = result.get("last_clicked")
 if last_clicked is not None:
