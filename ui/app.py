@@ -292,6 +292,16 @@ def _run_search(
         return None
 
 
+def _can_reroll(run: RunSession | None) -> bool:
+    """引き直せるか（在庫に**次の1本**があるか。AC-08-1）。
+
+    判定を `session.reroll` と揃える（あちらは `cursor + 1 >= len(stock)` で
+    末尾を見る）。**在庫があること**ではなく**次があること**で決める——
+    在庫1本の実行は最初から末尾なので、押せてはいけない。
+    """
+    return run is not None and run.cursor + 1 < len(run.stock)
+
+
 def _show_result(run: RunSession, checkpoints: tuple[Checkpoint, ...]) -> None:
     """選ばれた1本を表示する（AC-01-4 / AC-02-1〜5 / AC-03-3 / AC-04-1）。
 
@@ -329,6 +339,12 @@ def _show_result(run: RunSession, checkpoints: tuple[Checkpoint, ...]) -> None:
     if run.outcome is SelectionOutcome.COMPROMISED:
         # AC-01-4「条件を満たすコースがなかった旨」。1本は出したうえで添える
         st.warning(messages.compromised())
+    elif not _can_reroll(run):
+        # 在庫の末尾（AC-08-3）。**押す前から伝える。** ボタンが灰色なだけでは
+        # なぜ押せないのか分からない。在庫が1本の実行は最初からこの状態で、
+        # 「尽きること」は異常ではなく通常の経路である（design.md 6.3）。
+        # 妥協パスでは `compromised()` が同じことを言っているので出さない
+        st.info(messages.stock_exhausted())
 
     st.subheader("このコース")
     st.write(messages.total_distance(current))
@@ -409,10 +425,10 @@ with search_column:
     search_clicked = st.button("コースを探す", type="primary", disabled=search_disabled)
 
 with reroll_column:
-    # 引き直せるのは在庫が2本以上あるときだけ。**在庫が1本でも押せる形にする**
-    # ——押した結果「これ以上ない」と伝えるのが AC-08-3 の要求で、
-    # ボタンを消すと「尽きた」ことを伝える機会が無くなる
-    reroll_clicked = st.button("別のコースを見る", disabled=run is None or not run.stock)
+    # **次の1本があるときだけ押せる。** 在庫が空・在庫の末尾では無効にし、
+    # 代わりに「これ以上の候補がありません」を**押す前から**出す（`_show_result`）。
+    # ボタンが灰色なだけでは、なぜ押せないのかが分からない（design.md 9.2）
+    reroll_clicked = st.button("別のコースを見る", disabled=not _can_reroll(run))
 
 if search_clicked and query is not None and settings is not None:
     run = _run_search(
@@ -422,23 +438,33 @@ if search_clicked and query is not None and settings is not None:
         if st.session_state.get("cache_diverged")
         else cached_approach_m,
     )
-    # 失敗した回（`None`）では前の結果を残す。入力を保って再実行できる
-    # 状態に近い（AC-06-4）
     if run is not None:
         st.session_state["run"] = run
+        # **描き直す。** ボタンの活性はこの回の先頭（＝実行の前）に決まって
+        # いるので、ここで止めると探した直後だけ「別のコースを見る」が
+        # 無効のまま残る（2026-08-07 の実機確認で判明）。
+        # `localStorage` への書き込みは挟んでいないので、design.md 8.4 の
+        # 「`setItem` の直後に `st.rerun()` を呼ばない」には触れない
+        st.rerun()
     else:
+        # 失敗した回は前の結果を残す（AC-06-4）。**描き直さない**——
+        # `_run_search` が出した失敗の文言が消えてしまう
         run = st.session_state.get("run")
 
 if reroll_clicked and run is not None:
     # **API を呼ばない**（AC-08-2）。在庫の次の1本へカーソルを進めるだけで、
     # `session.reroll` は `models` 以外を import していないので呼ぶ手段がない
     reroll_result = session.reroll(run)
-    run = reroll_result.session
-    st.session_state["run"] = run
-    if not reroll_result.advanced:
-        # 在庫の末尾（AC-08-3）。**例外ではなく通常の経路**——悲観側の
-        # 見積もりでは5回に1回は引き直しが1回もできない（design.md 6.3）
-        st.warning(messages.stock_exhausted())
+    if reroll_result.advanced:
+        st.session_state["run"] = reroll_result.session
+        # 「探す」と同じ理由で描き直す。進んだ結果**末尾に到達した**場合、
+        # ボタンの活性はこの回の先頭で決まっているので、描き直さないと
+        # 押せない状態に変わったことが画面に反映されない
+        st.rerun()
+    else:
+        # ボタンを無効にしているので通常は届かない。届いたら**押せる状態の
+        # 判定と `session.reroll` の判定が食い違っている**ので、記録に残す
+        _LOG.debug("引き直しが在庫の末尾で止まった（ボタンの活性判定と不一致）")
 
 current_candidate = run.current if run is not None else None
 checkpoints: tuple[Checkpoint, ...] = ()
