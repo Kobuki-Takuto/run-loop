@@ -28,11 +28,14 @@ UI の飾りはここに直接書く。
 import logging
 import time
 from datetime import UTC, datetime
+from pathlib import Path
+from typing import Final
 
 import streamlit as st
 from streamlit.errors import StreamlitSecretNotFoundError
 from streamlit_folium import st_folium
 
+import runloop
 from runloop import messages, session
 from runloop.checkpoints import select_checkpoints
 from runloop.config import SNAP_RADIUS_M, Settings, load_settings
@@ -68,6 +71,56 @@ _METRES_PER_KM = 1000.0
 
 st.set_page_config(page_title="RunLoop")
 st.title("RunLoop")
+
+# import されるモジュールが置かれた場所。**`ui/app.py` 自身は含めない**
+# （メインスクリプトは毎回読み直されるので、更新されていても古くならない）
+_MODULE_ROOTS: Final = (
+    Path(__file__).resolve().parent.parent / "runloop",
+    Path(__file__).resolve().parent,
+)
+_MAIN_SCRIPT: Final = Path(__file__).resolve()
+
+
+def _stale_modules() -> list[str]:
+    """読み込み済みより新しいソースを探す（design.md 10.4 の手動確認の足場）。
+
+    Streamlit は再実行のたびに**メインスクリプトだけ**を読み直し、
+    `import` 済みのモジュールは `sys.modules` に残したままにする。
+    そのため古いプロセスに繋がっていると、**画面だけが新しく中身が古い**
+    状態になり、実在する関数が「無い」というエラーで落ちる。
+
+    ここで検出して止めれば、`AttributeError` のトレースバックではなく
+    **何をすればよいか**が画面に出る（design.md 9.2 と同じ考え方）。
+
+    **この検査自体が古いモジュールに依存してはいけない。** `LOADED_AT` を
+    直に読む形にしたら、この仕組みを入れる前の版が載ったプロセスで
+    `AttributeError: module 'runloop' has no attribute 'LOADED_AT'` になった
+    （2026-08-07 に実際に踏んだ）。**検出したい状態そのもので検出器が壊れる。**
+    `getattr` で受けて、無ければ「確実に古い」と結論する。
+    """
+    loaded_at = getattr(runloop, "LOADED_AT", None)
+    if loaded_at is None:
+        return ["runloop/__init__.py（この検査を入れる前の版）"]
+
+    stale: list[str] = []
+    for root in _MODULE_ROOTS:
+        for path in root.rglob("*.py"):
+            if path.resolve() == _MAIN_SCRIPT:
+                continue
+            if path.stat().st_mtime > loaded_at:
+                stale.append(path.name)
+    return sorted(set(stale))
+
+
+_stale = _stale_modules()
+if _stale:
+    st.error(
+        "サーバーが古いコードで動いています（更新済み: "
+        + "、".join(_stale)
+        + "）。ターミナルで Ctrl+C を押して止めてから、"
+        "`uv run streamlit run ui/app.py` で起動し直してください。"
+    )
+    st.stop()
 
 
 def _load_settings() -> Settings | None:

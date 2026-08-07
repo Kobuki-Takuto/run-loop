@@ -1511,6 +1511,43 @@ T17, T13, T09, T11
 `--server.runOnSave` を有効にしても、再読み込みされるのはスクリプトだけで
 この問題は解けない。**T19 の確認手順にも入れる。**
 
+**2回目の再発で、本当の原因が分かった（2026-08-07）。**
+「再起動を忘れた」のではなく、**再起動したつもりで古いプロセスが生き残り、
+ブラウザがそちらに繋がっていた。** 開発中に使っていた
+`pkill -f "streamlit run ui/app.py"` が**一度も効いていなかった**ためで、
+Windows での実際のコマンドラインが
+`...\streamlit.exe run ui/app.py` の形（`streamlit.exe run`）なので、
+`"streamlit run ui/app.py"` というパターンに一致しない。
+**気づいた時点で 32 個のプロセスが積み上がっており**、ポート 8501 は
+最初の1個が掴んだままだった。新しく起動したプロセスも
+「Local URL: http://localhost:8501」と表示するので、**ログを見ても
+どれに繋がっているか判別できない。**
+
+Windows で確実に止める方法。
+
+```powershell
+Get-CimInstance Win32_Process -Filter "Name like '%python%'" |
+  Where-Object { $_.CommandLine -like '*streamlit*' } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+```
+
+**「行番号が変わったから app.py は新しい ＝ 再起動できている」は成り立たない。**
+古いプロセスでもメインスクリプトは毎回読み直されるので、行番号だけは
+最新になる。この推論で2回とも「再起動はできている」と判断してしまった。
+
+**手順ではなく構造で防ぐことにした。** `runloop/__init__.py` に
+`LOADED_AT`（パッケージが import された時刻）を置き、`ui/app.py` の先頭で
+`runloop/**` と `ui/**` のソースの更新時刻と比べる。ソースのほうが新しければ
+**`st.error` で「サーバーが古いコードで動いています」と出して `st.stop()`**
+する。`AttributeError` のトレースバックではなく、何をすればよいかが画面に出る。
+
+**検出器が検出したい状態で壊れる罠を踏んだ。** 最初の実装は
+`runloop.LOADED_AT` を直に読んでいたので、この仕組みを入れる前の版が
+載ったプロセスでは
+`AttributeError: module 'runloop' has no attribute 'LOADED_AT'` になった。
+`getattr` で受けて、無ければ「確実に古い」と結論する形に直した。
+**両方向（クリーンなら出ない・`touch` すれば出る）を実機で確認した。**
+
 **自動テストと mypy は正しかった。** どちらも欠落を見逃していない——
 そもそも欠落していないので、検出すべきものが無かった。
 念のため `messages.checkpoint_line_MISSING(...)` に書き換えて確かめたところ、
@@ -1633,7 +1670,11 @@ T18b
       実機確認で `AttributeError` を出した原因）。Streamlit が読み直すのは
       `ui/app.py` だけで、`import` したモジュールは `sys.modules` に
       残り続ける。**画面だけが新しく、中身が古い**状態になり、
-      実在する関数が「無い」というエラーになる
+      実在する関数が「無い」というエラーになる。
+      **`ui/app.py` が起動時に検出して止めるようにした**（T18a）ので、
+      「サーバーが古いコードで動いています」が出たら再起動する。
+      Windows では `pkill` が効かない（コマンドラインが `streamlit.exe run`
+      の形）。上記の PowerShell で確実に止める
 
 ### 参照
 
