@@ -62,9 +62,12 @@ from runloop.models import (
     Candidate,
     GenerationOutcome,
     LatLon,
+    Maneuver,
     ProviderRoute,
+    RawStep,
     RouteQuery,
     SnapResult,
+    TurnDirection,
 )
 from runloop.ors.client import OrsClient
 from runloop.ports import (
@@ -117,6 +120,19 @@ BARRIER_TIMEOUT_S: Final = 10.0
 DIRECTIONS_URL: Final = f"{ORS_BASE_URL}/v2/directions/foot-walking/geojson"
 API_KEY: Final = "test-key-must-never-appear-in-messages"
 
+# フェイクが返す案内。**方向転換とそれ以外を混ぜる**（T11 のホワイトリストが
+# 効いていることを候補の側から見るため）。位置は着目しないので固定でよい
+STEP_POSITION: Final = LatLon(lat=31.60, lon=130.56)
+FAKE_STEPS: Final = (
+    RawStep(distance_m=200.0, maneuver=Maneuver.DEPART, position=STEP_POSITION),
+    RawStep(distance_m=300.0, maneuver=Maneuver.TURN_LEFT, position=STEP_POSITION),
+    RawStep(distance_m=150.0, maneuver=Maneuver.KEEP_RIGHT, position=STEP_POSITION),
+    RawStep(distance_m=100.0, maneuver=Maneuver.TURN_RIGHT, position=STEP_POSITION),
+)
+# 上から取れるはずの方向転換（累積はその step の開始点。design.md 7.1）
+EXPECTED_TURN_DIRECTIONS: Final = (TurnDirection.TURN_LEFT, TurnDirection.TURN_RIGHT)
+EXPECTED_TURN_CUMULATIVES: Final = (200.0, 650.0)
+
 
 def north_of(origin: LatLon, meters: float) -> LatLon:
     """起点から真北へ `meters` 離れた点。
@@ -160,8 +176,10 @@ class FakeProvider:
         errors: Mapping[int, RouteProviderError] | None = None,
         barrier: threading.Barrier | None = None,
         barrier_from: int = 1,
+        steps: tuple[RawStep, ...] = FAKE_STEPS,
     ) -> None:
         self._approach_m = approach_m
+        self._steps = steps
         self._approaches = dict(approaches) if approaches else {}
         self._errors = dict(errors) if errors else {}
         self._barrier = barrier
@@ -237,6 +255,7 @@ class FakeProvider:
             descent_m=DESCENT_M,
             snapped_start=start,
             geometry=(start, north_of(origin, approach_m + 100.0)),
+            steps=self._steps,
             ratelimit_remaining=REMAINING - index,
         )
 
@@ -652,6 +671,47 @@ def test_candidates_carry_the_target_distance_and_the_route_values() -> None:
     assert candidate.ascent_m in {ASCENT_M + index for index in range(CANDIDATE_COUNT)}
     assert candidate.descent_m == pytest.approx(DESCENT_M)
     assert len(candidate.geometry) == 2
+
+
+def test_candidates_carry_the_turns_extracted_from_the_steps() -> None:
+    """応答の案内から `Turn` を取り出して候補に載せること（design.md 2.1、AC-04-1）。
+
+    **ここで載せないとチェックポイントが出せない。** `ProviderRoute.steps` は
+    `Candidate` に無いフィールドなので、候補に変換した時点で捨てると
+    `ui/` からは二度と届かない（`checkpoints.select_checkpoints` に渡す
+    `Turn` の出どころが無くなる）。
+
+    ホワイトリスト（T11）が効いていることも同時に見る——フェイクは4件の
+    案内を返すが、方向転換は2件だけである。
+    """
+    fake = FakeProvider()
+
+    outcome = generate(fake, QUERY)
+    candidate = outcome.candidates[0]
+
+    assert tuple(turn.direction for turn in candidate.turns) == EXPECTED_TURN_DIRECTIONS
+    assert tuple(turn.cumulative_loop_m for turn in candidate.turns) == EXPECTED_TURN_CUMULATIVES
+
+
+def test_every_candidate_carries_its_own_turns() -> None:
+    """15本すべてに `Turn` が載ること。
+
+    先頭だけを見るテストは、1本目にしか載せない実装でも通る。
+    """
+    fake = FakeProvider()
+
+    outcome = generate(fake, QUERY)
+
+    assert all(candidate.turns for candidate in outcome.candidates)
+
+
+def test_a_route_without_steps_yields_a_candidate_without_turns() -> None:
+    """案内が0件のルートは異常ではない（design.md 7.3）。例外にせず空で返す。"""
+    fake = FakeProvider(steps=())
+
+    outcome = generate(fake, QUERY)
+
+    assert outcome.candidates[0].turns == ()
 
 
 def test_the_requested_length_is_the_target_distance_without_correction() -> None:

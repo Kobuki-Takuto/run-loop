@@ -12,7 +12,8 @@ from typing import Final
 
 import folium
 
-from runloop.models import Candidate, Checkpoint, LatLon, TurnDirection
+from runloop import messages
+from runloop.models import Candidate, Checkpoint, LatLon
 
 # 起点未指定のときの初期表示。ユーザーの実際の位置とは無関係な広域表示にする
 # （AC-05-1「地図をクリックして起点を指定する」の前段階。実在の地点を焼き付けない）
@@ -23,18 +24,6 @@ _ORIGIN_ZOOM: Final = 16
 # チェックポイントの丸印の半径（px）。指で操作できる大きさは手動確認の対象
 # （design.md 10.4）だが、既定のマーカーより小さいので大きめに取る
 _CHECKPOINT_RADIUS: Final = 12
-
-# 方向転換の向きの日本語表記（design.md 7.1 のホワイトリストと1対1。AC-04-2）。
-# ここに無い `TurnDirection` があれば KeyError で気づける（黙って無表記にしない）
-_DIRECTION_LABELS: Final[dict[TurnDirection, str]] = {
-    TurnDirection.TURN_LEFT: "左折",
-    TurnDirection.TURN_RIGHT: "右折",
-    TurnDirection.SHARP_LEFT: "鋭角左折",
-    TurnDirection.SHARP_RIGHT: "鋭角右折",
-    TurnDirection.SLIGHT_LEFT: "緩い左折",
-    TurnDirection.SLIGHT_RIGHT: "緩い右折",
-}
-
 
 def build_map(
     origin: LatLon | None = None,
@@ -69,22 +58,11 @@ def build_map(
     for checkpoint in checkpoints:
         folium.CircleMarker(
             location=(checkpoint.position.lat, checkpoint.position.lon),
+            # 吹き出しの文言は `messages.py` から取る（画面に文字列リテラルを
+            # 書かない。AC-04-2 / AC-04-4 の標準形の定義元は1か所）
+            tooltip=messages.checkpoint_line(checkpoint),
             radius=_CHECKPOINT_RADIUS,
-            tooltip=_checkpoint_tooltip(checkpoint),
             fill=True,
         ).add_to(folium_map)
 
     return folium_map
-
-
-def _checkpoint_tooltip(checkpoint: Checkpoint) -> str:
-    """チェックポイントの吹き出し文言（AC-04-2 / AC-04-4）。
-
-    地点名は取得できた場合のみ併記し、無ければ何も足さない
-    （`None` を文字列として出さない）。
-    """
-    label = _DIRECTION_LABELS[checkpoint.direction]
-    text = f"{checkpoint.order}. 起点から{checkpoint.distance_from_origin_m:.0f}m {label}"
-    if checkpoint.name is not None:
-        text += f"（{checkpoint.name}）"
-    return text

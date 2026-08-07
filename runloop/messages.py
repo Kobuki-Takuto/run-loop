@@ -21,7 +21,13 @@
 from typing import Final
 
 from runloop.config import API_KEY_ENV_NAME
-from runloop.models import APPROACH_OK_M, TOLERANCE_M, Candidate
+from runloop.models import (
+    APPROACH_OK_M,
+    TOLERANCE_M,
+    Candidate,
+    Checkpoint,
+    TurnDirection,
+)
 from runloop.ports import (
     ApiKeyMissing,
     ApiKeyRejected,
@@ -63,6 +69,40 @@ def ascent(candidate: Candidate) -> str:
     注記なしで出すと、接近距離が大きい起点で実態と合わない値になる。
     """
     return f"獲得標高 {candidate.ascent_m:.0f} m（周回部分のみ。起点との往復は含みません）"
+
+
+# 方向転換の向きの表記（AC-04-2）。**`TurnDirection` と1対1にする。**
+# 辞書に無い向きがあれば `KeyError` で気づける（黙って無表記にしない）
+_DIRECTION_LABELS: Final[dict[TurnDirection, str]] = {
+    TurnDirection.TURN_LEFT: "左折",
+    TurnDirection.TURN_RIGHT: "右折",
+    TurnDirection.SHARP_LEFT: "鋭角左折",
+    TurnDirection.SHARP_RIGHT: "鋭角右折",
+    TurnDirection.SLIGHT_LEFT: "緩い左折",
+    TurnDirection.SLIGHT_RIGHT: "緩い右折",
+}
+
+
+def checkpoint_line(checkpoint: Checkpoint) -> str:
+    """チェックポイント1件の表示（AC-04-2 / AC-04-4）。
+
+    **標準形は requirements.md AC-04-4 が文面で定めている**——
+    「起点から 1.2km 地点を左折」。単位（キロメートル）も桁（小数第1位）も
+    そこに書かれているので、ここで変えない。
+
+    地点名は取得できた場合のみ併記する。名前がないことは異常ではなく、
+    実測では 71/71 = 100% が名前なしで**こちらが通常の経路**である
+    （design.md 7.1）。`None` を文字列にせず、括弧ごと出さない。
+
+    **地図の吹き出しと一覧の両方がこの1か所を使う**（`ui/map_view.py` /
+    `ui/app.py`）。表記を画面側に置くと、AC-04-2 が定める内容が2か所に分かれる。
+    """
+    label = _DIRECTION_LABELS[checkpoint.direction]
+    km = checkpoint.distance_from_origin_m / _METRES_PER_KM
+    text = f"{checkpoint.order}. 起点から {km:.1f} km 地点を{label}"
+    if checkpoint.name is not None:
+        text += f"（{checkpoint.name}）"
+    return text
 
 
 # --- 調整の案内（AC-02-3 / AC-02-4） ----------------------------------------

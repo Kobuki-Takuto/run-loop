@@ -22,7 +22,7 @@ import pytest
 
 from runloop import messages
 from runloop.config import API_KEY_ENV_NAME
-from runloop.models import Candidate, LatLon
+from runloop.models import Candidate, Checkpoint, LatLon, TurnDirection
 from runloop.ports import (
     ApiKeyMissing,
     ApiKeyRejected,
@@ -39,7 +39,9 @@ from runloop.ports import (
 ACTION_MARKER = "ください"
 
 # 値を整形するだけの関数。**これらは「次の行動」を持たない**（文言ではなく表示値）
-VALUE_FORMATTERS = frozenset({"total_distance", "distance_error", "ascent"})
+VALUE_FORMATTERS = frozenset(
+    {"total_distance", "distance_error", "ascent", "checkpoint_line"}
+)
 
 
 def make_candidate(
@@ -62,6 +64,23 @@ def make_candidate(
     )
 
 
+def make_checkpoint(
+    *,
+    order: int = 1,
+    distance_from_origin_m: float = 1_234.0,
+    direction: TurnDirection = TurnDirection.TURN_LEFT,
+    name: str | None = None,
+) -> Checkpoint:
+    """テスト用のチェックポイントを組む。座標は文言に現れないので固定でよい。"""
+    return Checkpoint(
+        order=order,
+        distance_from_origin_m=distance_from_origin_m,
+        direction=direction,
+        name=name,
+        position=LatLon(lat=31.5966, lon=130.5571),
+    )
+
+
 def all_messages() -> dict[str, str | None]:
     """公開関数を1回ずつ呼び、名前 → 文言の対応を作る。
 
@@ -73,6 +92,7 @@ def all_messages() -> dict[str, str | None]:
         "total_distance": messages.total_distance(candidate),
         "distance_error": messages.distance_error(candidate),
         "ascent": messages.ascent(candidate),
+        "checkpoint_line": messages.checkpoint_line(make_checkpoint()),
         "adjustment_advice": messages.adjustment_advice(candidate),
         "approach_notice": messages.approach_notice(120.0),
         "origin_rejected": messages.origin_rejected(420.3),
@@ -150,6 +170,97 @@ def test_ascent_is_marked_as_loop_only() -> None:
     assert "67" in text
     assert "周回" in text
     assert "含み" in text
+
+
+# --- 1b. チェックポイントの行（AC-04-2 / AC-04-4） ---------------------------
+
+
+def test_checkpoint_line_uses_the_standard_form() -> None:
+    """AC-04-4「標準形は『起点から 1.2km 地点を左折』」。
+
+    **キロメートル・小数第1位。** requirements.md が文面そのものを標準形として
+    定めている数少ない例で、単位も桁もそこに書かれている。
+    """
+    text = messages.checkpoint_line(
+        make_checkpoint(distance_from_origin_m=1_234.0, direction=TurnDirection.TURN_LEFT)
+    )
+
+    assert "1.2" in text
+    assert "km" in text
+    assert "左折" in text
+    # メートルのまま出していないこと（T16 の初版はこの形だった）
+    assert "1234" not in text
+
+
+def test_checkpoint_line_rounds_instead_of_truncating() -> None:
+    """小数第2位以降を切り捨てないこと（`total_distance` と同じ規律）。
+
+    **ちょうど半分（1250m = 1.25km）を使わない。** Python の書式指定は
+    偶数丸めなので 1.2 になるが、半分をどちらに倒すかは AC-04-4 が
+    定めていない。要件にない挙動をテストで固定すると、実装の都合を
+    仕様に格上げすることになる。ここで見たいのは**切り捨てていないこと**
+    だけなので、半分から外れた値で見る。
+    """
+    assert "1.3" in messages.checkpoint_line(make_checkpoint(distance_from_origin_m=1_260.0))
+
+
+def test_checkpoint_line_states_the_order() -> None:
+    """何番目のチェックポイントかが分かること（最大5件が並ぶ。AC-04-1）。"""
+    assert "3" in messages.checkpoint_line(make_checkpoint(order=3))
+
+
+def test_checkpoint_line_appends_the_name_when_present() -> None:
+    """AC-04-4「地点名は取得できた場合のみ併記する」。"""
+    text = messages.checkpoint_line(make_checkpoint(name="国道10号"))
+
+    assert "国道10号" in text
+
+
+def test_checkpoint_line_omits_the_name_when_absent() -> None:
+    """名前がないことは異常として扱わない（AC-04-4）。`None` を文字列にしない。
+
+    実測では 71/71 = 100% が名前なしで、**こちらが通常の経路**である
+    （design.md 7.1）。
+    """
+    text = messages.checkpoint_line(make_checkpoint(name=None))
+
+    assert "None" not in text
+    # 名前を入れる括弧だけが残らないこと（「左折（）」にしない）
+    assert "（）" not in text
+
+
+@pytest.mark.parametrize(
+    ("direction", "expected"),
+    [
+        (TurnDirection.TURN_LEFT, "左折"),
+        (TurnDirection.TURN_RIGHT, "右折"),
+        (TurnDirection.SHARP_LEFT, "鋭角左折"),
+        (TurnDirection.SHARP_RIGHT, "鋭角右折"),
+        (TurnDirection.SLIGHT_LEFT, "緩い左折"),
+        (TurnDirection.SLIGHT_RIGHT, "緩い右折"),
+    ],
+)
+def test_checkpoint_line_translates_every_direction(
+    direction: TurnDirection, expected: str
+) -> None:
+    """6種の方向転換それぞれに表記があること（AC-04-2「方向転換の向き」）。"""
+    assert expected in messages.checkpoint_line(make_checkpoint(direction=direction))
+
+
+def test_every_turn_direction_has_a_distinct_label() -> None:
+    """6種が**別々の**表記になること。
+
+    1件ずつ「含まれる」を見るだけだと、全部を「左折」にしても
+    `TURN_LEFT` の検査は通る（他は落ちるが、部分文字列の包含関係で
+    「鋭角左折」が「左折」を含むような取りこぼしが起こりうる）。
+    件数で締める。
+    """
+    labels = {
+        messages.checkpoint_line(make_checkpoint(direction=direction))
+        for direction in TurnDirection
+    }
+
+    assert len(labels) == len(TurnDirection)
 
 
 # --- 2. 調整の案内（AC-02-3 / AC-02-4） --------------------------------------

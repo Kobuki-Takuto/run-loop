@@ -39,6 +39,7 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from typing import Final
 
+from runloop.checkpoints import extract_turns
 from runloop.config import CACHE_DRIFT_TOLERANCE_M, CANDIDATE_COUNT
 from runloop.geo import haversine
 from runloop.models import (
@@ -341,6 +342,13 @@ def _to_candidate(route: ProviderRoute, query: RouteQuery) -> Candidate:
     起点だけで決まりシードに依存しないが、それは ORS の実測事実であって
     ドメインの不変則ではない。プローブの値を全候補に配ると、前提が崩れたときに
     合計距離（AC-01-2）が静かに間違う。
+
+    **`steps` から `Turn` を取り出すのもここである**（2026-08-07、T18a）。
+    `Candidate` は `steps` を持たない（生の案内はプロバイダの語彙である）ので、
+    ここで変換しないと案内が候補に変換した時点で失われ、`ui/` から
+    チェックポイント（AC-04-1）を組み立てる手段が無くなる。どれが方向転換かの
+    判断（AC-04-4 のホワイトリスト）は `checkpoints.py` に置いたままで、
+    ここはその結果を運ぶだけである。
     """
     return Candidate(
         seed=route.seed,
@@ -350,6 +358,7 @@ def _to_candidate(route: ProviderRoute, query: RouteQuery) -> Candidate:
         descent_m=route.descent_m,
         target_m=query.target_m,
         geometry=route.geometry,
+        turns=extract_turns(route.steps),
     )
 
 
