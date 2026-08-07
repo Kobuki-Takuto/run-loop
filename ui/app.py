@@ -307,6 +307,11 @@ with map_slot:
         width=700,
         height=500,
         key=map_key,
+        # **クリックだけを受け取る。** 既定では地図の移動・拡大でも値が返り、
+        # そのたびに Streamlit が再実行して地図を作り直すため、**ドラッグした
+        # 位置が初期位置に戻る**（2026-08-07 の実機確認で判明）。
+        # ここで絞ると、パンとズームでは再実行が起きず操作が保たれる
+        returned_objects=["last_clicked"],
     )
 
 if run is not None:

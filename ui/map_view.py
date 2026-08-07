@@ -54,6 +54,7 @@ def build_map(
         folium.PolyLine(  # type: ignore[no-untyped-call]
             locations=[(point.lat, point.lon) for point in candidate.geometry],
         ).add_to(folium_map)
+        _fit_to_course(folium_map, candidate=candidate, origin=origin)
 
     for checkpoint in checkpoints:
         folium.CircleMarker(
@@ -66,3 +67,24 @@ def build_map(
         ).add_to(folium_map)
 
     return folium_map
+
+
+def _fit_to_course(
+    folium_map: folium.Map, *, candidate: Candidate, origin: LatLon | None
+) -> None:
+    """コース全体が画面に入るように寄せる。
+
+    起点を中心に固定倍率で描くと、目標距離が大きいコースが画面から
+    はみ出して全体を見られない。**起点も範囲に含める**——接近区間の道は
+    描かないが（design.md 7.2）、起点そのものはマーカーとして出ており、
+    見えなくなってはいけない。
+
+    **コースが無いときは呼ばない**（呼び出し側の条件）。1点だけに寄せると
+    範囲が潰れて最大倍率になり、周りを見て起点を選び直せなくなる。
+    """
+    points = list(candidate.geometry)
+    if origin is not None:
+        points.append(origin)
+    lats = [point.lat for point in points]
+    lons = [point.lon for point in points]
+    folium_map.fit_bounds([[min(lats), min(lons)], [max(lats), max(lons)]])

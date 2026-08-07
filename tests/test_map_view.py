@@ -48,6 +48,15 @@ def circle_marker_coordinates(html: str) -> list[list[float]]:
     return [json.loads(m.group(1)) for m in re.finditer(r"L\.circleMarker\(\s*(\[[^\]]*\])", html)]
 
 
+def fit_bounds_coordinates(html: str) -> list[list[float]] | None:
+    """HTML から `fitBounds(...)` の範囲を取り出す。無ければ `None`。"""
+    match = re.search(r"fitBounds\(\s*(\[\[.*?\]\])", html, re.S)
+    if match is None:
+        return None
+    result: list[list[float]] = json.loads(match.group(1))
+    return result
+
+
 def polyline_coordinates(html: str) -> list[list[float]]:
     """HTML から `L.polyline(...)` の座標配列を取り出す。
 
@@ -164,6 +173,37 @@ def test_build_map_draws_exactly_one_polyline() -> None:
 
     assert html.count("L.polyline") == 1
     assert polyline_coordinates(html) == [[point.lat, point.lon] for point in geometry]
+
+
+def test_build_map_fits_the_view_to_the_whole_course() -> None:
+    """コースがあれば全体が画面に入るように寄せること。
+
+    起点を中心に固定倍率で描くと、目標距離が大きいコースが画面から
+    はみ出して全体を見られない（2026-08-07 の実機確認で出た要望）。
+    **起点も範囲に含める**——接近区間の道は描かないが（design.md 7.2）、
+    起点そのものはマーカーとして出ており、見えなくなってはいけない。
+    """
+    geometry = (
+        LatLon(lat=31.60000, lon=130.55000),
+        LatLon(lat=31.61000, lon=130.57000),
+    )
+    candidate = make_candidate(geometry=geometry)
+    origin = LatLon(lat=31.59000, lon=130.54000)
+
+    bounds = fit_bounds_coordinates(html_of(map_view.build_map(origin=origin, candidate=candidate)))
+
+    assert bounds == [[31.59000, 130.54000], [31.61000, 130.57000]]
+
+
+def test_build_map_without_a_course_does_not_fit_bounds() -> None:
+    """コースが無いときは寄せないこと。
+
+    起点1点に `fit_bounds` を当てると、範囲が潰れて最大倍率まで
+    寄ってしまい、周りを見て起点を選び直せなくなる。
+    """
+    html = html_of(map_view.build_map(origin=LatLon(lat=31.6, lon=130.55)))
+
+    assert fit_bounds_coordinates(html) is None
 
 
 # --- 4. チェックポイントのマーカー（AC-04-1〜2・AC-04-4） -------------------

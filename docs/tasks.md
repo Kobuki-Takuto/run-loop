@@ -1485,6 +1485,56 @@ T17, T13, T09, T11
 これは中間状態として受け入れる。`NO_CANDIDATE` / `ORIGIN_REJECTED` の
 ときに結果欄が空になるのも同じ扱い（文言は AC-06-3 の担当）。
 
+### 実機確認で出た2件（2026-08-07）
+
+#### 1. `AttributeError: module 'runloop.messages' has no attribute 'checkpoint_line'`
+
+**コードの欠落ではなかった。** 原因は
+**Streamlit がメインスクリプトだけを読み直し、インポート済みのモジュールを
+再読み込みしないこと**である。起動しっぱなしのサーバーで確認したため、
+`ui/app.py` は最新（`checkpoint_line` を呼ぶ）に更新される一方、
+`runloop.messages` は起動時点の版（`checkpoint_line` が無い）が
+`sys.modules` に残り続けていた。
+
+**再現して確定させた。** `checkpoint_line` を消した状態でサーバーを起動 →
+ファイルを元に戻す → ページを再読み込み、という手順で、
+`app.py` に一時的に置いた診断行が「app.py は今読まれた」と表示しながら
+`hasattr(messages, "checkpoint_line")` が `False` を返した。
+**片方だけが更新されることが目で見える形になった。**
+
+| 何が | 再実行で読み直されるか |
+|---|---|
+| `streamlit run` に渡したスクリプト（`ui/app.py`） | **される** |
+| `import` したモジュール（`runloop/**`、`ui/map_view.py`） | **されない** |
+
+**対処は「`runloop/` を触ったらサーバーを再起動する」。**
+`--server.runOnSave` を有効にしても、再読み込みされるのはスクリプトだけで
+この問題は解けない。**T19 の確認手順にも入れる。**
+
+**自動テストと mypy は正しかった。** どちらも欠落を見逃していない——
+そもそも欠落していないので、検出すべきものが無かった。
+念のため `messages.checkpoint_line_MISSING(...)` に書き換えて確かめたところ、
+mypy は `ui/app.py:221: error: Module has no attribute
+"checkpoint_line_MISSING"; maybe "checkpoint_line"? [attr-defined]` を出した。
+**`ui/app.py` は mypy の対象に入っており、「存在しない関数を呼ぶ」欠落は
+`uv run mypy .` で検出できる**（画面の自動テストが無くても、この種の
+欠落は型検査が捕まえる）。CI にも入っているので push すれば止まる。
+
+#### 2. 地図をドラッグすると初期位置に戻る
+
+`st_folium` は既定で地図の**移動・拡大の結果も**返し、そのたびに
+Streamlit が再実行される。再実行のたびに `build_map()` が
+初期の中心・倍率で新しい地図を組み立て直すため、動かした位置が失われていた。
+
+`returned_objects=["last_clicked"]` を渡して**クリックだけを受け取る**ようにした。
+パンとズームでは再実行が起きなくなり、操作が保たれる。起点の指定
+（AC-05-1）はクリックで動くので影響しない。
+
+**併せて `fit_bounds` を足した**（`ui/map_view.py`）。起点を中心に固定倍率で
+描いていたので、目標距離が大きいコースは画面からはみ出していた。
+コースがあるときだけ、起点とコース全体が入る範囲に寄せる（1点だけに
+寄せると最大倍率まで寄ってしまうので、コースが無いときは呼ばない）。
+
 ### 申し送り: キャッシュ乖離の破棄が永続しない
 
 `generation` が `cache_diverged` を返したとき（design.md 8.5.1）、
@@ -1579,6 +1629,11 @@ T18b
       取り違え）。保存が残っている状態が既定なので、消さずに見ると
       AC-07-2（復元）を見ていることになる。
       `localStorage.removeItem("runloop.origin.v1")` の後にリロードする
+- [ ] **`runloop/` を触ったらサーバーを再起動してから確認する**（T18a の
+      実機確認で `AttributeError` を出した原因）。Streamlit が読み直すのは
+      `ui/app.py` だけで、`import` したモジュールは `sys.modules` に
+      残り続ける。**画面だけが新しく、中身が古い**状態になり、
+      実在する関数が「無い」というエラーになる
 
 ### 参照
 
