@@ -89,15 +89,25 @@ spike/                    検証用の使い捨てスクリプト。本体から
 
 ```
 ui/  ──▶ generation / selection / checkpoints / messages / session / persistence
-              │                                     │
-              ▼                                     ▼
-           ports.py ◀── ors/client.py ── ors/mapper.py
-              │
+  │           │                                     │
+  │           ▼                                     ▼
+  │        ports.py ◀── ors/client.py ── ors/mapper.py
+  │           │              ▲
+  └───────────┼──────────────┘
               ▼
         models.py ◀── geo.py
 
         messages.py ──▶ config.py ──▶ models.py / ports.py
 ```
+
+**`ui/` は `ors/client.py` を名前で参照する**（2026-08-07 変更、T17）。
+当初は「`config.py` が組み立てて注入する」としていたが、`ors/client.py` が
+`config.py` の定数（`RATE_LIMIT_RETRY_WAIT_S` など）を import しているため、
+`config.py` が `ors/client.py` を import すると循環 import になる
+（`config → ors.client → config`）。依存の向きが一方向（上から下）の `ui/` は
+`config.py` と `ors/client.py` のどちらも安全に import できるので、
+プロバイダの組み立て（`OrsClient(settings)`）を `ui/app.py` に置いた。
+`ports.py` の Protocol と6例外だけを上位の語彙にする方針（3.1）は変わらない。
 
 `models.py` は何にも依存しない。`ors/` は `ports.py` の Protocol を満たすだけで、
 上位から名前で参照されない（`config.py` が組み立てて注入する）。

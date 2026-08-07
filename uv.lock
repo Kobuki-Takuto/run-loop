@@ -1031,7 +1031,7 @@ wheels = [
 [[package]]
 name = "run-loop"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "folium" },
     { name = "python-dotenv" },
