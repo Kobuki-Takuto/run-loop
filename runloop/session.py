@@ -14,7 +14,8 @@ AC-08-2「引き直しでは外部 API を呼び出さない」は、呼ばな�
 `RunSession` を返す。`ui/` は `st.session_state["run"]` を差し替えるだけにする。
 """
 
-from dataclasses import dataclass, replace
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 from runloop.models import (
@@ -48,6 +49,13 @@ class RunSession:
     # 生成時刻（ログとデバッグ用）。**現在時刻はここでは読まない**——
     # 呼び出し側から受け取る（generation.py が失効の判定を持たないのと同じ）
     generated_at: datetime
+    # 失敗の内訳（例外の型の名前 → 件数）。**全滅の原因を言い分けるために運ぶ**
+    # （2026-08-07 に追加、AC-06-1）。これが無いと、15本すべてが接続不能で
+    # 失敗しても画面には AC-06-3 の「候補が得られませんでした。起点を道路の
+    # 近くに指定し直すか」しか出せず、**起点は悪くないのに起点を疑わせる**。
+    # 部分的な失敗（15本中1〜2本の 404）は画面に出さない（design.md 4.4）——
+    # 出すかどうかを決めるのは表示側で、ここは事実を運ぶだけである
+    failures: Mapping[str, int] = field(default_factory=dict)
 
     @property
     def stock(self) -> tuple[Candidate, ...]:
@@ -108,6 +116,7 @@ def start(
         cursor=0,
         approach_m=generation.approach_m,
         generated_at=generated_at,
+        failures=generation.failures,
     )
 
 

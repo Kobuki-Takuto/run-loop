@@ -207,9 +207,10 @@ def _search(
 ) -> RunSession:
     """15本投げて在庫を作る（AC-01-1。design.md 4.6.2 の2経路）。
 
-    **例外を捕まえない。** 失敗経路の表示（AC-06-1〜4）は T18b の責務で、
-    T18a の段階では Streamlit のトレースバックが画面に出る（tasks.md の
-    「この時点で残る未実装」。中間状態として受け入れる）。
+    **ここでは例外を捕まえない。** 捕まえるのは呼び出し側の1か所
+    （`_run_search`）で、`RouteProviderError` とその他の例外を分けて扱う
+    （AC-06-1 / AC-06-4）。捕まえる場所を散らすと、どの経路が画面に
+    何を出すのかが追えなくなる。
 
     所要時間と消費回数をログに出す。非機能要件（10秒以内・15回以内）の
     実測はこのログで行い、**画面には出さない**（design.md 9.2）。
@@ -250,6 +251,47 @@ def _search(
     )
 
 
+def _run_search(
+    *,
+    query: RouteQuery,
+    settings: Settings,
+    cached_approach_m: float | None,
+) -> RunSession | None:
+    """実行を1か所で包み、**どの失敗でもアプリを止めない**（AC-06-4）。
+
+    Streamlit は未捕捉の例外でトレースバックを画面に出し、以降の描画を
+    止める。それでは「再実行できる状態を保つ」を満たせない（design.md 9.2）。
+
+    **2段に分けて捕まえる。** プロバイダ由来（`RouteProviderError`）は
+    種類ごとに次の行動が違うので `messages.provider_failure` が翻訳する
+    （AC-06-1）。それ以外は「予期しないエラー」に寄せる（AC-06-4）。
+    **例外の型・ステータス・残数はログへ。画面には行動可能な文言だけ**
+    （design.md 9.2）。
+
+    失敗しても `st.session_state["run"]` を触らない——**前の結果を残す**
+    ほうが、入力を保って再実行できる状態に近い。
+    """
+    try:
+        return _search(
+            query=query, settings=settings, cached_approach_m=cached_approach_m
+        )
+    except RouteProviderError as error:
+        # 残数も型名もここでログに落とす（画面には出さない）
+        _LOG.warning(
+            "実行が失敗した: %s / 残り呼び出し可能数 %s",
+            type(error).__name__,
+            error.ratelimit_remaining,
+        )
+        st.error(messages.provider_failure(error))
+        return None
+    except Exception:
+        # **握りつぶさない。** 画面には行動可能な文言を出し、
+        # 原因はトレースバックごとログに残す（design.md 9.2）
+        _LOG.exception("予期しない失敗で実行を中断した")
+        st.error(messages.unexpected_error())
+        return None
+
+
 def _show_result(run: RunSession, checkpoints: tuple[Checkpoint, ...]) -> None:
     """選ばれた1本を表示する（AC-01-4 / AC-02-1〜5 / AC-03-3 / AC-04-1）。
 
@@ -257,8 +299,29 @@ def _show_result(run: RunSession, checkpoints: tuple[Checkpoint, ...]) -> None:
     （50m 以下では接近距離を出さない、など）も文言側が `None` を返す形で
     持っており、ここでは分岐しない。
 
-    `NO_CANDIDATE` / `ORIGIN_REJECTED` の文言は T18b の責務（AC-06-3）。
+    **結論ごとに出すものが違う**（design.md 5.2）。`NO_CANDIDATE` は
+    1本も出せていない（AC-06-3）、`ORIGIN_REJECTED` は起点が悪い（AC-01-3）。
+    どちらも表示する候補が無いので、文言だけを出して戻る。
     """
+    if run.outcome is SelectionOutcome.ORIGIN_REJECTED:
+        # 起点が 300m 超。**候補があっても表示しない**（design.md 5.2）。
+        # 起点確定時のゲート（T17）を通っていれば通常ここには来ないが、
+        # キャッシュを使った経路 A では実測で初めて分かる場合がある
+        if run.approach_m is not None:
+            st.error(messages.origin_rejected(run.approach_m))
+        else:
+            st.error(messages.origin_no_road())
+        return
+
+    if run.outcome is SelectionOutcome.NO_CANDIDATE:
+        # 全滅、または異常値の除外で0件（AC-06-3 / AC-01-5）。
+        # **原因が分かるならそれを言う**（AC-06-1）。15本すべてが接続不能で
+        # 失敗したのに「起点を道路の近くに指定し直すか」とだけ出すと、
+        # 起点は悪くないのに起点を疑わせる（2026-08-07 の実機確認で判明）
+        cause = messages.failure_summary(run.failures)
+        st.error(cause if cause is not None else messages.no_candidate())
+        return
+
     current = run.current
     if current is None:
         return
@@ -337,16 +400,45 @@ if run is not None and query is not None and session.is_stale(run, query):
     st.session_state["run"] = None
 
 search_disabled = query is None or load.state is LoadState.PENDING or settings is None
-if st.button("コースを探す", type="primary", disabled=search_disabled):
-    if query is not None and settings is not None:
-        run = _search(
-            query=query,
-            settings=settings,
-            cached_approach_m=None
-            if st.session_state.get("cache_diverged")
-            else cached_approach_m,
-        )
+
+# **「探す」と「引き直し」を同じ画面に並べる**（design.md 6.3）。在庫が
+# 尽きたときの次の行動が「もう一度探す」なので、離れた場所にあると辿れない
+search_column, reroll_column = st.columns(2)
+
+with search_column:
+    search_clicked = st.button("コースを探す", type="primary", disabled=search_disabled)
+
+with reroll_column:
+    # 引き直せるのは在庫が2本以上あるときだけ。**在庫が1本でも押せる形にする**
+    # ——押した結果「これ以上ない」と伝えるのが AC-08-3 の要求で、
+    # ボタンを消すと「尽きた」ことを伝える機会が無くなる
+    reroll_clicked = st.button("別のコースを見る", disabled=run is None or not run.stock)
+
+if search_clicked and query is not None and settings is not None:
+    run = _run_search(
+        query=query,
+        settings=settings,
+        cached_approach_m=None
+        if st.session_state.get("cache_diverged")
+        else cached_approach_m,
+    )
+    # 失敗した回（`None`）では前の結果を残す。入力を保って再実行できる
+    # 状態に近い（AC-06-4）
+    if run is not None:
         st.session_state["run"] = run
+    else:
+        run = st.session_state.get("run")
+
+if reroll_clicked and run is not None:
+    # **API を呼ばない**（AC-08-2）。在庫の次の1本へカーソルを進めるだけで、
+    # `session.reroll` は `models` 以外を import していないので呼ぶ手段がない
+    reroll_result = session.reroll(run)
+    run = reroll_result.session
+    st.session_state["run"] = run
+    if not reroll_result.advanced:
+        # 在庫の末尾（AC-08-3）。**例外ではなく通常の経路**——悲観側の
+        # 見積もりでは5回に1回は引き直しが1回もできない（design.md 6.3）
+        st.warning(messages.stock_exhausted())
 
 current_candidate = run.current if run is not None else None
 checkpoints: tuple[Checkpoint, ...] = ()

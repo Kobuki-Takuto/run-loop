@@ -18,6 +18,7 @@
 文言ではなく表示値なので、この規律の対象外である。
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 from runloop.config import API_KEY_ENV_NAME
@@ -196,6 +197,24 @@ def no_candidate() -> str:
     )
 
 
+def stock_exhausted() -> str:
+    """在庫を出し切った（AC-08-3）。**黙って同じコースを再表示しない。**
+
+    全滅（`no_candidate`）とは状況が違う。あちらは1本も出せていないが、
+    こちらは出したうえで**次が無い**。悲観側の見積もりでは5回に1回は
+    引き直しが1回もできない（design.md 6.3）ので、これは異常ではなく
+    **通常の経路**である。
+
+    次の行動は「もう一度探す」しかない。引き直しは在庫から出すので
+    API を使わないが（AC-08-2）、尽きたあとに新しいコースを得るには
+    再実行するしかない。**それを名指しする**（design.md 9.2 / 6.3）。
+    """
+    return (
+        "これ以上の候補がありません。"
+        "別のコースが見たいときは、もう一度探すか、目標距離を変えてください。"
+    )
+
+
 # --- 失敗の翻訳（AC-06-1 / AC-06-2 / AC-06-4） ------------------------------
 
 # キーの未設定と無効を同じ文言にするのは、ユーザーがすべきことが両方とも
@@ -241,6 +260,30 @@ def provider_failure(error: RouteProviderError) -> str:
     if error_type in _FAILURE_TEXTS:
         return _FAILURE_TEXTS[error_type]
     return _UNAVAILABLE_ROUTE_TEXT
+
+
+def failure_summary(failures: Mapping[str, int]) -> str | None:
+    """全滅の原因を型の名前から文言にする（AC-06-1）。
+
+    `generation.py` は失敗を例外にせず**種類ごとに数えて**返す
+    （design.md 4.4）。そのため上位に届くのは例外そのものではなく
+    「型の名前 → 件数」であり、`provider_failure` の型で引く表を使えない。
+    ここで名前から引き直す。
+
+    **最も多い種類を採る。** 15本のうち 429 が 12 件・404 が 3 件なら、
+    伝えるべきは「混み合っている」である。
+
+    知らない名前と、失敗が無い場合は `None`。**それらしい文言を当てない**——
+    表に無い名前に既定を当てると実際とは違う原因を案内しうる。呼び出し側は
+    `None` のとき AC-06-3 の一般的な文言（`no_candidate`）に落とす。
+    """
+    if not failures:
+        return None
+    dominant = max(failures.items(), key=lambda item: item[1])[0]
+    for error_type, text in _FAILURE_TEXTS.items():
+        if error_type.__name__ == dominant:
+            return text
+    return None
 
 
 def unexpected_error() -> str:

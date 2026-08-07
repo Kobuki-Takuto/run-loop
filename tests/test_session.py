@@ -16,6 +16,7 @@ design.md 6.2 の遷移表に対応する節に分けてある。
 
 import ast
 import dataclasses
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -68,13 +69,14 @@ def make_generation(
     *candidates: Candidate,
     approach_m: float | None = 0.7,
     verdict: ApproachVerdict | None = ApproachVerdict.OK,
+    failures: Mapping[str, int] | None = None,
 ) -> GenerationOutcome:
     """生成の結果を組む。既定は「起点が道路の上で、全候補が測れた」状態。"""
     return GenerationOutcome(
         candidates=candidates,
         approach_m=approach_m,
         verdict=verdict,
-        failures={},
+        failures=dict(failures) if failures else {},
         calls_consumed=15,
         aborted_early=False,
         cache_diverged=False,
@@ -125,6 +127,32 @@ def test_start_shows_the_chosen_course_first() -> None:
 
     assert session.cursor == 0
     assert session.current is flat
+
+
+def test_start_carries_the_failure_breakdown() -> None:
+    """失敗の内訳を `RunSession` が運ぶこと（AC-06-1、2026-08-07 に追加）。
+
+    **これが無いと、全滅の原因を画面で言い分けられない。** 15本すべてが
+    接続不能で失敗しても、画面には AC-06-3 の「候補が得られませんでした。
+    起点を道路の近くに指定し直すか」しか出せず、**起点は悪くないのに
+    起点を疑わせる**（実機で実際にそうなった）。原因の種類は
+    `GenerationOutcome.failures` にあるので、選択後も運ぶ。
+    """
+    generation = make_generation(failures={"ProviderUnavailable": 15})
+
+    run = start(QUERY, generation, select(generation), generated_at=GENERATED_AT)
+
+    assert run.failures == {"ProviderUnavailable": 15}
+
+
+def test_start_has_no_failures_when_everything_succeeded() -> None:
+    """失敗が無ければ空であること（「原因が分からない」と区別する）。"""
+    candidate = make_candidate(seed=1, loop_m=5_000.0)
+    generation = make_generation(candidate)
+
+    run = start(QUERY, generation, select(generation), generated_at=GENERATED_AT)
+
+    assert run.failures == {}
 
 
 def test_start_keeps_the_order_selection_decided() -> None:
@@ -281,7 +309,10 @@ def test_session_touches_no_provider() -> None:
     internal = {name for name in imported if name.split(".")[0] == "runloop"}
 
     assert internal <= {"runloop.models"}, f"models 以外に依存している: {sorted(internal)}"
-    assert external <= {"dataclasses", "datetime", "typing"}, (
+    # `collections.abc` は `failures: Mapping[str, int]` の型注釈のためだけに使う
+    # （2026-08-07 に追加）。**通信の手段ではない**ので許可する側に入れた——
+    # このテストが守りたいのは「API を呼ぶ手段を持たない」ことである
+    assert external <= {"collections.abc", "dataclasses", "datetime", "typing"}, (
         f"標準ライブラリ以外が入っている: {sorted(external)}"
     )
 

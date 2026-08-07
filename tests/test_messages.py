@@ -100,7 +100,9 @@ def all_messages() -> dict[str, str | None]:
         "origin_missing": messages.origin_missing(),
         "compromised": messages.compromised(),
         "no_candidate": messages.no_candidate(),
+        "stock_exhausted": messages.stock_exhausted(),
         "provider_failure": messages.provider_failure(RateLimited("429 Too Many Requests")),
+        "failure_summary": messages.failure_summary({"ProviderUnavailable": 15}),
         "unexpected_error": messages.unexpected_error(),
     }
 
@@ -427,6 +429,36 @@ def test_no_candidate_says_nothing_was_obtained() -> None:
     assert "得られませんでした" in text
 
 
+def test_stock_exhausted_says_there_is_nothing_left() -> None:
+    """AC-08-3「在庫を出し切った場合、それ以上の候補がない旨を表示する」。
+
+    **黙って同じコースを再表示しない**ことが基準なので、尽きたことを
+    言葉にする必要がある。
+    """
+    text = messages.stock_exhausted()
+
+    assert "候補" in text
+    assert ACTION_MARKER in text
+
+
+def test_stock_exhausted_offers_searching_again() -> None:
+    """次の行動が「もう一度探す」であること（design.md 6.3）。
+
+    在庫方式では引き直しに API を使わない（AC-08-2）が、尽きたあとに
+    新しいコースを得る手段は再実行しかない。**それを名指しする。**
+    """
+    assert "探す" in messages.stock_exhausted()
+
+
+def test_stock_exhausted_is_not_the_no_candidate_message() -> None:
+    """全滅（AC-06-3）と在庫切れ（AC-08-3）が別の文言であること。
+
+    前者は1本も出せていない、後者は出したうえで次が無い。
+    次にすべきことは似ているが、置かれている状況が違う。
+    """
+    assert messages.stock_exhausted() != messages.no_candidate()
+
+
 def test_compromised_and_no_candidate_are_different_messages() -> None:
     """妥協パスと全滅が別の文言であること（design.md 5.2 の2つの結論）。
 
@@ -509,6 +541,50 @@ def test_provider_failure_does_not_leak_status_or_key() -> None:
     assert "5b3ce35978511100" not in text
     assert "Authorization" not in text
     assert "openrouteservice.org" not in text
+
+
+def test_failure_summary_translates_the_dominant_failure() -> None:
+    """全滅の原因を型名から文言にする（AC-06-1、2026-08-07 に追加）。
+
+    `GenerationOutcome.failures` は**例外の型の名前 → 件数**（生成側は
+    例外を上げずに数える。design.md 4.4）。全滅したとき、その原因を
+    伝えないと AC-06-3 の「起点を道路の近くに」だけが出て、
+    **起点は悪くないのに起点を疑わせる**（実機で実際にそうなった）。
+    """
+    text = messages.failure_summary({"ProviderUnavailable": 15})
+
+    assert text is not None
+    assert "接続できませんでした" in text
+
+
+def test_failure_summary_picks_the_most_common_kind() -> None:
+    """複数の種類が混ざったら**最も多いもの**を採る。
+
+    15本のうち 429 が 12 件・404 が 3 件なら、伝えるべきは「混み合っている」。
+    件数を見ずに先頭を採ると、少数派の原因を案内することになる。
+    """
+    text = messages.failure_summary({"RouteNotFound": 3, "RateLimited": 12})
+
+    assert text is not None
+    assert "混み合" in text
+
+
+def test_failure_summary_is_none_when_nothing_failed() -> None:
+    """失敗が無ければ `None`（何も出さない）。
+
+    **「原因が分からない」と「失敗していない」を区別する。** 呼び出し側は
+    `None` のとき AC-06-3 の文言に落とす。
+    """
+    assert messages.failure_summary({}) is None
+
+
+def test_failure_summary_is_none_for_an_unknown_kind() -> None:
+    """知らない型名なら `None`。**それらしい文言を当てない。**
+
+    表に無い名前に既定の文言を当てると、実際とは違う原因を案内しうる。
+    分からないときは呼び出し側の一般的な文言（AC-06-3）に委ねる。
+    """
+    assert messages.failure_summary({"SomethingUnexpected": 9}) is None
 
 
 def test_domain_errors_are_still_six() -> None:
@@ -609,6 +685,7 @@ def test_design_9_1_table_rows_have_distinct_messages() -> None:
         "接近距離 50〜300m": messages.approach_notice(120.0),
         "全滅": messages.no_candidate(),
         "在庫0件（妥協パス）": messages.compromised(),
+        "在庫を出し切った": messages.stock_exhausted(),
         "429 が残った": messages.provider_failure(RateLimited("429")),
         "5xx・接続不能": messages.provider_failure(ProviderUnavailable("503")),
         "予期しない例外": messages.unexpected_error(),
