@@ -68,6 +68,54 @@ def classify_approach(approach_m: float) -> ApproachVerdict:
     return ApproachVerdict.OK
 
 
+class TurnDirection(enum.Enum):
+    """チェックポイントとして扱う方向転換の向き（AC-04-4 のホワイトリスト。design.md 7.1）。
+
+    `Maneuver` のうち、進行方向が変わる6種のみをここで表す。`STRAIGHT` や
+    `KEEP_LEFT` / `KEEP_RIGHT`（分岐でどちらの車線に留まるかの案内で、
+    進行方向は変わらない）、`UNKNOWN`（未観測の種別）は現れない——
+    `checkpoints.py` がホワイトリストで弾き、そもそも `Turn` を作らない。
+    """
+
+    TURN_LEFT = "turn_left"
+    TURN_RIGHT = "turn_right"
+    SHARP_LEFT = "sharp_left"
+    SHARP_RIGHT = "sharp_right"
+    SLIGHT_LEFT = "slight_left"
+    SLIGHT_RIGHT = "slight_right"
+
+
+@dataclass(frozen=True)
+class Turn:
+    """ループ上の方向転換1件（design.md 2.3 / 7.1）。
+
+    `cumulative_loop_m` は**ルート始点からの**生の累積距離であり、起点からの
+    距離ではない。起点からの距離（接近距離のオフセットを足した値）は
+    `Checkpoint` だけが持つ（design.md 7.2「加算する場所を1か所に限定する」）。
+    """
+
+    direction: TurnDirection
+    cumulative_loop_m: float
+    position: LatLon
+    name: str | None = None
+
+
+@dataclass(frozen=True)
+class Checkpoint:
+    """画面に表示するチェックポイント1件（表示用。design.md 2.3 / 7.2）。
+
+    `distance_from_origin_m` は `approach_m + Turn.cumulative_loop_m`。
+    加算するのは `checkpoints.py` がこの型を生成する箇所だけで、`Turn` は
+    生の累積距離のまま持ち回る（二重加算・加算漏れを型で防ぐ）。
+    """
+
+    order: int
+    distance_from_origin_m: float
+    direction: TurnDirection
+    name: str | None
+    position: LatLon
+
+
 @dataclass(frozen=True)
 class Candidate:
     """1本の候補コース。
@@ -84,7 +132,8 @@ class Candidate:
     それは ORS の実測事実であってドメインの不変則ではないため
     （プロバイダを替えて前提が崩れても構造が壊れない側に倒す。design.md 2.2）。
 
-    `turns`（方向転換の列）は T11 で追加する。
+    `turns` の既定は空タプル。方向転換0件のルートは異常ではなく
+    （design.md 7.3）、T02〜T10 が作る `Candidate` を壊さないためでもある。
     """
 
     seed: int
@@ -97,6 +146,7 @@ class Candidate:
     descent_m: float
     target_m: int
     geometry: tuple[LatLon, ...]
+    turns: tuple[Turn, ...] = ()
 
     @property
     def total_m(self) -> float:
