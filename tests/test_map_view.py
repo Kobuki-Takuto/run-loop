@@ -10,6 +10,10 @@
    ポリラインがちょうど1本（ループのみ）であることで固定する
 3. チェックポイントの表示内容（方向転換の向き・距離・地点名の有無）が
    AC-04-2 / AC-04-4 の要求を満たすこと
+4. **プロバイダ由来の文字列を描画層でエスケープすること**（design.md 8.7）。
+   道の名前は OpenStreetMap 由来で編集可能であり、folium は吹き出しを
+   エスケープせず JS のテンプレートリテラルに差し込む（T19 の
+   `/security-review` で発見）
 
 タップしやすい部品サイズ（非機能要件）は自動テストの対象外で、手動確認する
 （design.md 10.4）。
@@ -250,6 +254,10 @@ def test_build_map_checkpoint_tooltip_comes_from_messages() -> None:
     表記（向きの日本語・単位・桁）を地図側に持つと、AC-04-4 が定める内容が
     2か所に分かれる。**画面に文字列リテラルを書かない**規律（T12）は
     地図の吹き出しにも及ぶ。
+
+    **描画層でエスケープを挟むようになった**（T19）が、ここで使う文言には
+    HTML / JS の特殊文字が含まれないのでそのまま現れる。エスケープが
+    効いていること自体は5節のテストが見る（役割を分ける）。
     """
     checkpoint = make_checkpoint(
         order=2, distance_from_origin_m=2_345.0, direction=TurnDirection.SLIGHT_RIGHT
@@ -306,6 +314,81 @@ def test_build_map_translates_every_turn_direction(
     )
 
     assert expected_label in html
+
+
+# --- 5. プロバイダ由来の文字列のエスケープ（design.md 8.7、T19 で発見） -----
+
+# JS のテンプレートリテラルを壊せる文字。folium の `Tooltip` は値をエスケープせず、
+# **バッククォートで囲まれた JS テンプレートリテラルの内側**に差し込む
+# （`branca.element.Template` は `jinja2.Template` の派生で autoescape が無効）。
+# `${...}` は補間として評価されるので、バッククォートを閉じる必要すらない
+DANGEROUS_NAME = "`${alert(1)}`\\"
+
+
+def test_build_map_escapes_template_literal_syntax_in_the_tooltip() -> None:
+    """道の名前で JS のテンプレートリテラルを壊せないこと（design.md 8.7）。
+
+    **道の名前は OpenStreetMap 由来で、誰でも編集できる。** 生のまま
+    差し込むと、被害者の生活圏の道路名を書き換えるだけで、アプリと同一
+    オリジンで JavaScript を実行できる。`localStorage` には**丸めていない
+    自宅座標**が入っている（design.md 8.2 / 8.7）ので、実害は座標の流出である。
+
+    **絶対数ではなく、安全な名前のときとの差で見る。** 区切りのバッククォートも、
+    タイルの著作権表示に含まれる JSON エスケープのバックスラッシュも、
+    **folium 自身が出す**ので絶対数では判定できない（実測でどちらも
+    危険な名前・安全な名前で同数）。危険な名前を入れても**増えない**ことが、
+    吹き出し由来の危険な文字が残っていないことを意味する。
+    """
+    origin = LatLon(lat=31.6, lon=130.55)
+    safe = html_of(
+        map_view.build_map(origin=origin, checkpoints=(make_checkpoint(name="国道10号"),))
+    )
+    dangerous = html_of(
+        map_view.build_map(origin=origin, checkpoints=(make_checkpoint(name=DANGEROUS_NAME),))
+    )
+
+    assert "${" not in dangerous, "テンプレートリテラルの補間が生のまま出ている"
+    assert dangerous.count("`") == safe.count("`"), "バッククォートが生のまま増えている"
+    assert dangerous.count("\\") == safe.count("\\"), "バックスラッシュが生のまま増えている"
+
+
+def test_the_dangerous_name_would_break_out_without_escaping() -> None:
+    """**この検査自体が意味を持つこと**を確かめる（対照）。
+
+    上のテストは「危険な文字が出ない」ことしか見ていないので、
+    `build_map` が名前を丸ごと捨てる実装でも通ってしまう。
+    エスケープした形（HTML 実体参照）で**残っている**ことを見て、
+    「消した」のではなく「無害化した」ことを固定する。
+    """
+    html = html_of(
+        map_view.build_map(
+            origin=LatLon(lat=31.6, lon=130.55),
+            checkpoints=(make_checkpoint(name=DANGEROUS_NAME),),
+        )
+    )
+
+    # `alert(1)` の本体は文字列として残る（消してはいない）
+    assert "alert(1)" in html
+    # バッククォートと `{` は実体参照になっている
+    assert "&#96;" in html
+    assert "&#123;" in html
+
+
+def test_build_map_escapes_html_in_the_tooltip() -> None:
+    """HTML タグとしても解釈させないこと。
+
+    吹き出しは `<div>` の内側に置かれるので、テンプレートリテラルを
+    壊さなくても `<img onerror=...>` で JavaScript を実行できる。
+    """
+    html = html_of(
+        map_view.build_map(
+            origin=LatLon(lat=31.6, lon=130.55),
+            checkpoints=(make_checkpoint(name="<img src=x onerror=alert(1)>"),),
+        )
+    )
+
+    assert "<img" not in html
+    assert "&lt;img" in html
 
 
 def test_turn_direction_still_has_six_members() -> None:

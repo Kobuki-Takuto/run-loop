@@ -8,6 +8,7 @@
 座標が正しく渡っていることと、ポリラインが1本であることだけである。
 """
 
+import html
 from typing import Final
 
 import folium
@@ -60,13 +61,49 @@ def build_map(
         folium.CircleMarker(
             location=(checkpoint.position.lat, checkpoint.position.lon),
             # 吹き出しの文言は `messages.py` から取る（画面に文字列リテラルを
-            # 書かない。AC-04-2 / AC-04-4 の標準形の定義元は1か所）
-            tooltip=messages.checkpoint_line(checkpoint),
+            # 書かない。AC-04-2 / AC-04-4 の標準形の定義元は1か所）。
+            # **描画層でエスケープする**（design.md 8.7）
+            tooltip=_safe_tooltip(messages.checkpoint_line(checkpoint)),
             radius=_CHECKPOINT_RADIUS,
             fill=True,
         ).add_to(folium_map)
 
     return folium_map
+
+
+def _safe_tooltip(text: str) -> str:
+    """吹き出しに渡す文字列を無害化する（design.md 8.7）。
+
+    **folium は吹き出しの値をエスケープしない。** `folium.map.Tooltip` は
+    `self.text = str(text)` と受けたうえで、`branca.element.Template`
+    （`jinja2.Template` の派生で **autoescape が無効**）の
+    ``bindTooltip(`<div>{{ this.text }}</div>`, ...)`` に差し込む。
+    つまり値は**バッククォートで囲まれた JS のテンプレートリテラルの内側**に、
+    かつ `<div>` の内側に、生のまま置かれる。
+
+    **HTML エスケープだけでは足りない。** テンプレートリテラルの内側では
+    `${...}` が式として評価されるので、`<` を潰してもバッククォートを
+    閉じる必要すらなく JavaScript を実行できる。
+
+    危険なのは道の名前である。**OpenStreetMap 由来で誰でも編集できる**
+    （`ors/mapper.py` は `"-"` を `None` にするだけで、他は素通しする）。
+    被害者の生活圏の道路名を書き換えるだけで、アプリと同一オリジンで
+    JavaScript を実行でき、`localStorage` の**丸めていない自宅座標**を
+    読み出せる（design.md 8.2 / 8.7）。
+
+    **HTML 実体参照に置き換える**（バックスラッシュでエスケープしない）。
+    実体参照なら JS の文字列としても危険な文字が1つも残らず、`<div>` の
+    内側では元の文字として表示される。順序が要る——`html.escape` を先に
+    かけないと、あとから入れる `&#96;` の `&` が二重にエスケープされる。
+
+    **ここに置くのは、必要なエスケープが描画技術ごとに違うため。**
+    `ors/mapper.py` で文字集合を制限すると、記号を含む正当な道路名を壊す。
+    `messages.py` は表示技術に依存しない文言を返す責務なので、そちらでもない。
+    """
+    escaped = html.escape(text, quote=True)
+    return (
+        escaped.replace("\\", "&#92;").replace("`", "&#96;").replace("${", "$&#123;")
+    )
 
 
 def _fit_to_course(
